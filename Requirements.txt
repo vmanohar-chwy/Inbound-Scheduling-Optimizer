@@ -1,0 +1,5 @@
+spyder
+pandas
+pyodbc
+gurobi
+

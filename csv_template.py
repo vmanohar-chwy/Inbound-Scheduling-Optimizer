@@ -8,7 +8,6 @@ import logging
 import logging.handlers
 import csv
 import pandas as pd
-#from vertica_python import connect
 import pyodbc
 import datetime as dtm
 from io import BytesIO as StringIO
@@ -17,7 +16,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-import unicodedata
 date = str(dtm.datetime.today().date())
 logger = logging.getLogger('csv template process')
 logger.setLevel(logging.DEBUG)
@@ -32,15 +30,6 @@ for handler in logger.handlers[:]:
     logger.removeHandler(handler)
 logger.addHandler(rh)
 logger.addHandler(ch)
- #conn_info = {'host' : 'bidb.chewy.local',
-     #'port': 5433,
-     #'user': 'vmanohar',
-     #'password':'Venkat0SU2018',
-     #'database':'bidb'
-    #}
-    #connecting to vertica
-    #connection = connect(**conn_info)
-    #cur = connection.cursor()
     
 cxn = pyodbc.connect("DSN=BIDB",autocommit = True)
 cur = cxn.cursor()
@@ -180,10 +169,8 @@ try:
             LEFT JOIN vas_final AS vl
             ON vl.Ref_no = d.Ref_no;
         """.format(fc)
-        #cur.execute(query)
-        #logger.info("Vertica Query is Executed")
-        #result = cur.fetchall()
         df = pd.read_sql(query,cxn)
+        logger.info("Vertica Query is Executed")
         df.columns = ['appt_id','vrdd','vrdd1','vrdd2','vrdd3','units','sku','obj','high_jump_rank','con_fl','upt','cr_dt','vendor','vendor_name','vas_units','vas_flag','carrier_name']
         dt1 = dict([(str(i),[str(j),str(k),str(l)]) for i,j,k,l in zip(df.appt_id,df.vrdd1,df.vrdd2,df.vrdd3)])
         #st_fl = dict([str(i),str(j)] for i,j in zip(df.appt_id,df.st_fl))
@@ -209,10 +196,9 @@ try:
                 WHERE cpl.FC_nm = '{0}' AND  cpl.Created_dt BETWEEN (SELECT CASE WHEN DAYOFWEEK(current_date) = 2 THEN current_date-3 + INTERVAL '0 SECOND' ELSE current_date-1 + INTERVAL '0 SECOND' END) AND (SELECT current_date - INTERVAL '1 SECOND') AND cpl.Ref_no NOT IN (SELECT Ref_no FROM  sandbox_supply_chain.iso_exception)  
                 GROUP BY 1,2
         """.format(fc)
-        #cur.execute(query)
-        #logger.info("Vertica Query is Executed")
-        #result = cur.fetchall()
+       
         df = pd.read_sql(query,cxn)
+        logger.info("Vertica Query is Executed")
         df.columns = ['ref','po','units','sku']
         ref_num = {str(k):g['po'].unique().tolist()for k,g in df.groupby('ref')}
         po = dict([(str(i),str(j)),[int(k),int(l)]] for i,j,k,l in zip(df.ref,df.po,df.units,df.sku))
@@ -225,10 +211,8 @@ try:
                 ON cpl.PO_no = pdp.document_number
                 WHERE  cpl.FC_nm = '{0}' AND cpl.Created_dt  BETWEEN (SELECT CASE WHEN DAYOFWEEK(current_date) = 2 THEN current_date-3 + INTERVAL '0 SECOND' ELSE current_date-1 + INTERVAL '0 SECOND' END) AND (SELECT current_date - INTERVAL '1 SECOND') AND cpl.Ref_no NOT IN (SELECT Ref_no FROM  sandbox_supply_chain.iso_exception)
         """.format(fc)
-        #cur.execute(query)
-        #logger.info("Vertica Query is Executed")
-        #result = cur.fetchall()
         df = pd.read_sql(query,cxn)
+        logger.info("Vertica Query is Executed")
         df.columns = ['ref','po','ordd']
         ordd = dict([str(i),str(j)] for i,j in zip(df.po,df.ordd))
         
@@ -246,9 +230,8 @@ try:
         JOIN aad.t_appt_appointment_log AS apl
         ON apl.appointment_id = pol.appointment_id
         """.format(fc)
-        #cur.execute(query)
-        #result = cur.fetchall()
         df = pd.read_sql(query,cxn)
+        logger.info("Vertica Query is Executed")
         rsch = {}
         if df.empty == False:
             df.columns = ['reference_number','appointment_id','Date','Time','PO_number']
@@ -521,7 +504,7 @@ except Exception as e:
     print("Error Reported")
     logger.error("Error in the code: "+str(e))
     fromaddr = 'scsystems@chewy.com'
-    toaddr = 'vmanohar@chewy.com,igonzalez1@chewy.com,EAlfonso@chewy.com,jxie@chewy.com'
+    toaddr = 'vmanohar@chewy.com'#,igonzalez1@chewy.com,EAlfonso@chewy.com,jxie@chewy.com'
     to = ', '.join(toaddr)
     msg = MIMEMultipart()
     msg['From'] = fromaddr
@@ -537,4 +520,3 @@ except Exception as e:
     print("Email was sent to the recipients: %s" %(toaddr))
     cxn.close()
     logger.info("Vertica is Disconnected")
-    

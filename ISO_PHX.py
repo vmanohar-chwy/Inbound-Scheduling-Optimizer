@@ -54,15 +54,6 @@ try:
     #giving slots 
     day_slots= ['05:30:00','06:00:00','06:30:00','07:30:00','08:30:00','09:00:00','09:30:00','10:00:00','10:30:00','11:00:00']
     night_slots=['18:00:00','18:30:00','19:00:00','19:30:00','20:00:00','20:30:00','21:00:00']
-    #conn_info = {'host' : 'bidb.chewy.local',
-     #'port': 5433,
-     #'user': 'vmanohar',
-     #'password':'Venkat0SU2018',
-     #'database':'bidb'
-    #}
-    #connecting to vertica
-    #connection = connect(**conn_info)
-    #cur = connection.cursor()
     cxn = pyodbc.connect("DSN=BIDB",autocommit = True)
     cur = cxn.cursor()
     logger.info("Vertica is Connected")
@@ -88,9 +79,6 @@ try:
     GROUP BY 1
     ORDER BY 1
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['date','U','S','Sl']
     sch_dict = dict([str(i),[int(j),int(k),int(l)]] for i,j,k,l in zip(df.date,df.U,df.S,df.Sl))
@@ -104,9 +92,6 @@ try:
     GROUP BY 1,2
     ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['dt','t','s']
     sch_slot = dict([(str(i),str(j)),int(k)] for i,j,k in zip(df.dt,df.t,df.s))
@@ -123,10 +108,6 @@ try:
     GROUP BY 1,2
     ORDER BY 1,2
     """
-    
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
     df.columns = ['dt','sh','u','s','sl']
     sch_sh = dict([(str(i),str(j)),[int(k),int(l),int(m)]] for i,j,k,l,m in zip(df.dt,df.sh,df.u,df.s,df.sl))
@@ -134,43 +115,52 @@ try:
     
     #Getting S&OP forecast
     query = """
-    SELECT  forecast_week_beg, buffered_units
-    FROM sandbox_supply_chain.network_forecast_from_weekly_excel_file
-    WHERE publish_week = DATE_TRUNC('week',current_date-7):: DATE - 1
-    AND forecast_week_beg BETWEEN DATE_TRUNC('week',current_date-30):: DATE -1 AND DATE_TRUNC('week',current_date+105):: DATE-1
-    AND fulfillment_center_name = 'PHX1'
-    AND LOWER(department) = 'inbound'
+    with FC_max_date as
+    (
+    select distinct date::date,wh_id,max(scrape_update_dttm) as max_date 
+    from sandbox_fulfillment.t_labor_model_inbound_forward_looking_capacity_new 
+    --where date::date = scrape_update_dttm::date + 14 --rolling 14 day lock
+    --date_trunc('week',date::date+1)-1 = timestampadd('week',2,date_trunc('week',scrape_update_dttm+1)-1) --2 week lock
+    group by 1,2
+    )
+    select iblm.wh_id,iblm.scrape_update_dttm,iblm.date::date as date,
+    ROUND(abs(iblm.planned_operations_units_received),0) AS planned_operations_units_received ,
+    ROUND(abs(iblm.planned_operations_units_received),0)-ROUND(abs(iblm.planned_units_received_nights),0) as planned_units_received_days,
+    ROUND(abs(iblm.planned_units_received_nights),0) AS planned_units_received_nights 
+    from sandbox_fulfillment.t_labor_model_inbound_forward_looking_capacity_new iblm
+    join FC_max_date fmd on iblm.scrape_update_dttm = fmd.max_date and iblm.wh_id = fmd.wh_id and iblm.date::date = fmd.date
+    where iblm.date::date >= current_date AND iblm.wh_id = 'PHX1'
+    order by wh_id, date;
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
-    df.columns = ['date','units']
-    temp_f = dict([i,float(j)] for i,j in zip(df.date,df.units))
+    df.columns = ['fc_nm','update_dttm','date','units','day_units','night_units']
+    f = dict([str(i),[float(j),float(k)]] for i,j,k in zip(df.date,df.day_units,df.night_units))
     
-    query = """
-    SELECT common_date_dttm, forecast_percent
-    FROM sandbox_supply_chain.daily_inbound_forecast_percent
-    WHERE common_date_dttm between current_date-7 and current_date+123 AND location = 'PHX1'
-    ORDER BY 1
-    """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
-    df = pd.read_sql(query,cxn)
-    df.columns = ['date','units']
-    temp_perc = dict([i,float(j)] for i,j in zip(df.date,df.units))
-    f = {}
-    f_sch = {}
-    for i in temp_f.keys():
-        k = 0
-        while k < 5:
-            a = i + dtm.timedelta(days = k+1)
-            if a in temp_perc:
-                f[str(a)] = temp_perc[a] * temp_f[i]
-            else:
-                f[str(a)] = 0.2* temp_f[i]
-            k = k+1
+# =============================================================================
+#     query = """
+#     SELECT common_date_dttm, forecast_percent
+#     FROM sandbox_supply_chain.daily_inbound_forecast_percent
+#     WHERE common_date_dttm between current_date-7 and current_date+123 AND location = 'PHX1'
+#     ORDER BY 1
+#     """
+#     #cur.execute(query)
+#     #result = cur.fetchall()
+#     #df = pd.DataFrame(data = result)
+#     df = pd.read_sql(query,cxn)
+#     df.columns = ['date','units']
+#     temp_perc = dict([i,float(j)] for i,j in zip(df.date,df.units))
+#     f = {}
+#     f_sch = {}
+#     for i in temp_f.keys():
+#         k = 0
+#         while k < 5:
+#             a = i + dtm.timedelta(days = k+1)
+#             if a in temp_perc:
+#                 f[str(a)] = temp_perc[a] * temp_f[i]
+#             else:
+#                 f[str(a)] = 0.2* temp_f[i]
+#             k = k+1
+# =============================================================================
     logger.info("Forecast data is collected") 
 
      
@@ -179,44 +169,51 @@ try:
         a = today + dtm.timedelta(days = i-1)
         if 1 <= cnt <= 3:
             if str(a) in f:
-                f[str(a)] = 1 * f[str(a)]
+                f[str(a)][0] = 1 * f[str(a)][0]
+                f[str(a)][1] = 1 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         
         elif 4 <= cnt <= 6:
             if str(a) in f:
-                f[str(a)] = 0.9 * f[str(a)]
+                f[str(a)][0] = 0.9 * f[str(a)][0]
+                f[str(a)][1] = 0.9 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         elif 7 <= cnt <= 9:
             if str(a) in f:
-                f[str(a)] = 0.8 * f[str(a)]
+                f[str(a)][0] = 0.8 * f[str(a)][0]
+                f[str(a)][1] = 0.8 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         elif 10 <= cnt <= 12:
             if str(a) in f:
-                f[str(a)] = 0.7 * f[str(a)]
+                f[str(a)][0] = 0.7 * f[str(a)][0]
+                f[str(a)][1] = 0.7 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         elif 13 <= cnt <= 15:
             if str(a) in f:
-                f[str(a)] = 0.6 * f[str(a)]
+                f[str(a)][0] = 0.6 * f[str(a)][0]
+                f[str(a)][1] = 0.6 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         elif 16 <= cnt <= 18:
             if str(a) in f:
-                f[str(a)] = 0.5 * f[str(a)]
+                f[str(a)][0] = 0.5 * f[str(a)][0]
+                f[str(a)][1] = 0.5 * f[str(a)][1]
                 cnt = cnt + 1
             else:
                 pass
         else:
             if str(a) in f:
-                f[str(a)] = 0.4 * f[str(a)]
+                f[str(a)][0] = 0.4 * f[str(a)][0]
+                f[str(a)][1] = 0.4 * f[str(a)][1]
             else:
                 pass
     logger.info("Added Dynamic weights to the S&OP forecast")
@@ -235,9 +232,6 @@ try:
     GROUP BY 1
     ORDER BY 1
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
     df.columns = ['date','vas_units']
     sch_vas = dict([str(i),int(j)] for i,j in zip(df.date,df.vas_units))
@@ -264,9 +258,6 @@ try:
     GROUP BY 1,2
     ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
     df.columns = ['dt','sh','vas_units']
     sch_vas_sh = dict([(str(i),str(j)),float(k)] for i,j,k in zip(df.dt,df.sh,df.vas_units))
@@ -289,9 +280,6 @@ try:
     WHERE apl.wh_id = 'PHX1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date
     ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
     df.columns = ['date','time','vas_flag']
     sch_vas_fl = dict([(str(i),str(j)),str(k)] for i,j,k in zip(df.date,df.time,df.vas_flag))
@@ -472,9 +460,6 @@ try:
         LEFT JOIN vas_final AS vl
         ON vl.Ref_no = d.Ref_no;
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
     df.columns = ['appt_id','vrdd','vrdd1','vrdd2','vrdd3','units','sku','obj','high_jump_rank','con_fl','upt','cr_dt','vendor','vendor_name','vas_units','vas_flag','carrier_name']
     dt1 = dict([(str(i),[str(j),str(k),str(l)]) for i,j,k,l in zip(df.appt_id,df.vrdd1,df.vrdd2,df.vrdd3)])
@@ -517,28 +502,23 @@ try:
             WHERE cpl.FC_nm = 'PHX1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND')  
             GROUP BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['ref','po','units','sku']
     ref_num = {str(k):g['po'].unique().tolist()for k,g in df.groupby('ref')}
     po = dict([(str(i),str(j)),[int(k),int(l)]] for i,j,k,l in zip(df.ref,df.po,df.units,df.sku))
     
     query = """
-            SELECT cpl.Ref_no,pdp.document_number,ISNULL(pdp.document_original_requested_delivery_dttm:: DATE,'1900-01-01')
+            SELECT cpl.Incident_No,cpl.Ref_no,pdp.document_number,ISNULL(pdp.document_original_requested_delivery_dttm:: DATE,'1900-01-01')
             FROM sandbox_supply_chain.carrier_portal_new_test AS cpl
             JOIN chewybi.procurement_document_measures AS pdp
             ON cpl.PO_no = pdp.document_number
             WHERE cpl.FC_nm = 'PHX1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND  cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND') 
             ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data = result)
     df = pd.read_sql(query,cxn)
-    df.columns = ['ref','po','ordd']
+    df.columns = ['inc','ref','po','ordd']
     ordd = dict([str(i),str(j)] for i,j in zip(df.po,df.ordd))
+    inc = dict([str(i),str(j)] for i,j in zip(df.ref,df.inc))
     
     logger.info("Getting PO details in terms of units,sku and ORDD")
     #cont_appt_scheduled
@@ -555,9 +535,6 @@ try:
     GROUP BY 1
     ORDER BY 1
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     if df.empty == False:    
         df.columns = ['date','cnt']
@@ -580,9 +557,6 @@ try:
     JOIN aad.t_appt_appointment_log AS apl
     ON apl.appointment_id = pol.appointment_id
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     rsch = {}
     if df.empty == False:
@@ -602,9 +576,6 @@ try:
     WHERE apl.request_date:: DATE BETWEEN current_date+1 AND current_date+60 AND LOWER(apl.status) <> 'cancelled' AND apl.standing_appt_id IS NOT NULL AND apl.vendor IS NOT NULL AND apl.wh_id = 'PHX1' AND pol.po_number IS NULL
     ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['dt','tm','vendor']
     stnd_date = {str(k):g['dt'].unique().tolist() for k,g in df.groupby('vendor')}
@@ -661,9 +632,6 @@ try:
     FROM final
     GROUP BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['y','x','r','t']
     v_units = dict([(str(i),str(j)),[float(k),float(l)]] for i,j,k,l in zip(df.y,df.x,df.r,df.t))
@@ -692,9 +660,6 @@ try:
     WHERE bulk_or_breakdown = 1
     ORDER BY 1,2
     """
-    #cur.execute(query)
-    #result = cur.fetchall()
-    #df = pd.DataFrame(data=result)
     df = pd.read_sql(query,cxn)
     df.columns = ['Dt','tm','bi']
     temp_bulk = dict([(str(i),str(j)),str(k)] for i,j,k in zip(df.Dt,df.tm,df.bi))
@@ -855,7 +820,7 @@ try:
                     for l in stnd_time[vendor[j]]:
                         if (k,l,vendor[j]) in stnd_fl.keys():
                             cnt = cnt+1
-                            if stnd_fl[(k,l,vendor[j])] == '0' and p == 0 and slot[k] < (slot_count[(k,'1')] + slot_count[(k,'2')]) and units[k] < 1.05 * f[k]:
+                            if stnd_fl[(k,l,vendor[j])] == '0' and p == 0 and slot[k] < (slot_count[(k,'1')] + slot_count[(k,'2')]) and units[k] < 1.05 * (f[k][0]+f[k][1]):
                                 if l in ['07:00:00'] and sch_sh[(k,'1')][2] < slot_count[(k,'1')]: 
                                     if (k,l) in out_3:
                                         out_3[(k,l)].append(j)
@@ -923,7 +888,7 @@ try:
                                                         sch_vas_fl[(k,night_slots[w])] = '2'
                                                 gh = gh+1 
                             else:
-                                if p == 0 and slot[k] + 1 < (slot_count[(k,'1')] + slot_count[(k,'2')]) - 10 and units[k] + exp_units[(k,'1')] + exp_units[(k,'2')] + units_sku_obj[j][0] < 1.05 * f[k] and cnt > len(stnd_time[vendor[j]]):
+                                if p == 0 and slot[k] + 1 < (slot_count[(k,'1')] + slot_count[(k,'2')]) - 10 and units[k] + exp_units[(k,'1')] + exp_units[(k,'2')] + units_sku_obj[j][0] < 1.05 * (f[k][0]+f[k][1]) and cnt > len(stnd_time[vendor[j]]):
                                     if k in std_ref:
                                         std_ref[k].append(j)
                                     else:
@@ -943,7 +908,7 @@ try:
             if b[k] == '1':
                 temp_bulk[(i,j)] = '1'
     for i in sch_dict.keys():
-        if (sch_dict[i][0] < 1.05 * f[i]) and (sch_sh[(i,'1')][2] >= len(day_slots)*2 or sch_sh[(i,'2')][2] >= len(night_slots)*2):
+        if (sch_dict[i][0] < 1.05 * (f[i][0]+f[i][1])) and (sch_sh[(i,'1')][2] >= len(day_slots)*2 or sch_sh[(i,'2')][2] >= len(night_slots)*2):
             slot_count[(i,'1')] = len(day_slots)*3 
             slot_count[(i,'2')] = len(night_slots)*3 
         else:
@@ -1116,10 +1081,11 @@ try:
         vas_appt_assign = {}
         for j in ref.keys():
             #capcity constraint
-            cap[j] = m1.addConstr(quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)-slack[j],GRB.LESS_EQUAL,(1.05*f[j])-sch_dict[j][0]-exp_units[j,'1']-exp_units[j,'2'], name ='cap[%s]' %(j))
+            cap[j] = m1.addConstr(quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)-slack[j],GRB.LESS_EQUAL,(1.05*(f[j][0]+f[j][1]))-sch_dict[j][0]-exp_units[j,'1']-exp_units[j,'2'], name ='cap[%s]' %(j))
+            #cap[j] = m1.addConstr(quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2),GRB.LESS_EQUAL,(1.05*f[j])-sch_dict[j][0]-exp_units[j,'1']-exp_units[j,'2'], name ='cap[%s]' %(j))
         #unit distribution constraint
-            unit[j,1] = m1.addConstr(U,GRB.GREATER_EQUAL,(exp_units[j,'1']+exp_units[j,'2']+sch_dict[j][0]+quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)-f[j]),name = 'unit[%s;%d]' %(j,1))
-            unit[j,2] = m1.addConstr(U,GRB.GREATER_EQUAL,(-exp_units[j,'1']-exp_units[j,'2']-sch_dict[j][0]-quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)+f[j]),name = 'unit[%s;%d]' %(j,2))
+            unit[j,1] = m1.addConstr(U,GRB.GREATER_EQUAL,(exp_units[j,'1']+exp_units[j,'2']+sch_dict[j][0]+quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)-f[j][0]-f[j][1]),name = 'unit[%s;%d]' %(j,1))
+            unit[j,2] = m1.addConstr(U,GRB.GREATER_EQUAL,(-exp_units[j,'1']-exp_units[j,'2']-sch_dict[j][0]-quicksum(units_sku_obj[k][0]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2)+f[j][0]+f[j][1]),name = 'unit[%s;%d]' %(j,2))
             #sku distribution constraint
             sku[j] = m1.addConstr(S,GRB.GREATER_EQUAL,sch_dict[j][1]+quicksum(units_sku_obj[k][1]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2), name = 'sku[%s]'%(j))
             #vas constraint
@@ -1253,11 +1219,11 @@ try:
                     shift_stand[j,k] = m2.addConstr(y[j,k,2],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(j,k))
         
         #day shift unit limitation
-        unit_shift[j,1]= m2.addConstr(US,GRB.GREATER_EQUAL,(0.54*f[j])-sch_sh[(j,'1')][0]-day1[(j,1)]-exp_units[(j,'1')],name='unit_shift[%s;%d]'%(j,1))
-        unit_shift[j,3]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'1')][0]+day1[(j,1)]+exp_units[(j,'1')]-0.54*f[j],name='unit_shift[%s;%d]'%(j,3))
+        unit_shift[j,1]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][0]-sch_sh[(j,'1')][0]-day1[(j,1)]-exp_units[(j,'1')],name='unit_shift[%s;%d]'%(j,1))
+        unit_shift[j,3]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'1')][0]+day1[(j,1)]+exp_units[(j,'1')]-f[j][0],name='unit_shift[%s;%d]'%(j,3))
         #night shift unit limitation
-        unit_shift[j,2]= m2.addConstr(US,GRB.GREATER_EQUAL,(0.4*1.05*f[j])-sch_sh[(j,'2')][0]-night1[(j,1)]-exp_units[(j,'2')],name='unit_shift[%s;%d]'%(j,2))
-        unit_shift[j,4]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'2')][0]+night1[(j,1)]+exp_units[(j,'2')]-(0.4*1.05*f[j]),name='unit_shift[%s;%d]'%(j,4))
+        unit_shift[j,2]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][1]-sch_sh[(j,'2')][0]-night1[(j,1)]-exp_units[(j,'2')],name='unit_shift[%s;%d]'%(j,2))
+        unit_shift[j,4]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'2')][0]+night1[(j,1)]+exp_units[(j,'2')]-f[j][1],name='unit_shift[%s;%d]'%(j,4))
         #day shift SKU limitation
         sku_shift[j,1]= m2.addConstr(SS,GRB.GREATER_EQUAL,sch_sh[(j,'1')][1]+day2[(j,2)],name='sku_shift[%s;%d]'%(j,1))
         #night shift SKU limitation
@@ -1649,57 +1615,59 @@ try:
         for k in out_3[(i,j)]:
             for l in ref_num[k]:
                 if (vendor[k],j) in std_no:
-                    out_file.write(str(k)+','+str(l)+','+str(i)+','+str(j)+','+str(po[(k,l)][0])+','+str(po[(k,l)][1])+','+str(hj_rank[k])+','+str(v_name[k])+','+str(csr[k])+','+'N'+','+str(ordd[l])+','+str(vrdd[k])+','+str(vas_units[k])+','+','+str(std_no[(vendor[k],j)]))
+                    out_file.write(str(k)+','+str(l)+','+str(i)+','+str(j)+','+str(po[(k,l)][0])+','+str(po[(k,l)][1])+','+str(hj_rank[k])+','+str(v_name[k])+','+str(csr[k])+','+'N'+','+str(ordd[l])+','+str(vrdd[k])+','+str(vas_units[k])+','+'419'+','+str(std_no[(vendor[k],j)]))
                     out_file.write('\n')
-                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1']
+                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1','Daily']
                 else:
                     out_file.write(str(k)+','+str(l)+','+str(i)+','+str(j)+','+str(po[(k,l)][0])+','+str(po[(k,l)][1])+','+str(hj_rank[k])+','+str(v_name[k])+','+str(csr[k])+','+'N'+','+str(ordd[l])+','+str(vrdd[k])+','+str(vas_units[k]))
                     out_file.write('\n')
-                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1']
+                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1','Daily']
             M3 = M3+1
     out_file.close()
     df_out = pd.DataFrame(data = data.values())
     logger.info("CSV file is created")
     logger.info("Writing data into Sandbox table")
     #Writing Exception day model
-    #if df_day.empty == False:
-        #buff = StringIO()
-        #for row in df_day.values.tolist():
-            #buff.write('{}|{}|{}|{}|{}|{}|{}|{}\n'.format(*row))
-        #cur.copy('COPY sandbox_supply_chain.iso_exception ("rundate","portal_fc","po_fc","Ref_no","PO_no","VRDD","created_dt","reason_code") FROM STDIN COMMIT', buff.getvalue())
-    #else:
-        #pass
     if df_day.empty == False:
         df_day.columns = ['rt','portal_fc','po_fc','ref','po','vrdd','cr_dt','rc']
         for index,row in df_day.iterrows():
             cur.execute('INSERT INTO sandbox_supply_chain.iso_exception ("rundate","portal_fc","po_fc","Ref_no","PO_no","VRDD","created_dt","reason_code") VALUES (?,?,?,?,?,?,?,?)',
                         (row['rt'],row['portal_fc'],row['po_fc'],row['ref'],row['po'],row['vrdd'],row['cr_dt'],row['rc']))
     #Writng Exception Shift model
-    #if df_sh.empty == False:
-        #buff = StringIO()
-        #for row in df_sh.values.tolist():
-            #buff.write('{}|{}|{}|{}|{}|{}|{}|{}\n'.format(*row))
-        #cur.copy('COPY sandbox_supply_chain.iso_exception ("rundate","portal_fc","po_fc","Ref_no","PO_no","VRDD","created_dt","reason_code") FROM STDIN COMMIT', buff.getvalue())
-    #else:
-        #pass
     if df_sh.empty == False:
         df_sh.columns = ['rt','portal_fc','po_fc','ref','po','vrdd','cr_dt','rc']
         for index,row in df_sh.iterrows():
             cur.execute('INSERT INTO sandbox_supply_chain.iso_exception ("rundate","portal_fc","po_fc","Ref_no","PO_no","VRDD","created_dt","reason_code") VALUES (?,?,?,?,?,?,?,?)',
                         (row['rt'],row['portal_fc'],row['po_fc'],row['ref'],row['po'],row['vrdd'],row['cr_dt'],row['rc']))
     #writing ISO output
-    #if df_out.empty == False:
-        #buff = StringIO()
-        #for row in df_out.values.tolist():
-             #buff.write('{}|{}|{}|{}|{}|{}|{}|{}|{}|{}\n'.format(*row))
-        #cur.copy('COPY sandbox_supply_chain.ISO_OUTPUT_NEW ("rundate","Reference_number","PO_number","Sch_date","Sch_time","Units","SKU","vendor","Created_dt","FC_nm") FROM STDIN COMMIT', buff.getvalue())
-    #else:
-        #pass
     if df_out.empty == False:
-        df_out.columns = ['rt','ref','po','dt','tm','units','sku','vendor','cr_dt','FC_nm']
+        df_out.columns = ['rt','ref','po','dt','tm','units','sku','vendor','cr_dt','FC_nm','Batch']
         for index,row in df_out.iterrows():
-            cur.execute('INSERT INTO sandbox_supply_chain.ISO_OUTPUT_NEW ("rundate","Reference_number","PO_number","Sch_date","Sch_time","Units","SKU","vendor","Created_dt","FC_nm") VALUES (?,?,?,?,?,?,?,?,?,?)',
-                        (row['rt'],row['ref'],row['po'],row['dt'],row['tm'],row['units'],row['sku'],row['vendor'],row['cr_dt'],row['FC_nm']))
+            cur.execute('INSERT INTO sandbox_supply_chain.ISO_OUTPUT_NEW ("rundate","Reference_number","PO_number","Sch_date","Sch_time","Units","SKU","vendor","Created_dt","FC_nm","Batch") VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                        (row['rt'],row['ref'],row['po'],row['dt'],row['tm'],row['units'],row['sku'],row['vendor'],row['cr_dt'],row['FC_nm'],row['Batch']))
+    
+    bulk_e = {}
+    cnt = 0
+    for i,j in sorted(out_3.keys()):
+        dt = pd.to_datetime(i).date()
+        tm = pd.to_datetime(j).time()
+        combine = dtm.datetime.combine(dt,tm)
+        est = pytz.timezone('US/Eastern')
+        loc = est.localize(combine)
+        utc = pytz.utc
+        loc = loc.astimezone(utc)
+        loc = loc.replace(tzinfo = None)
+        for k in out_3[(i,j)]:
+            for l in ref_num[k]:
+                bulk_e[cnt] = [str(k),str(l),str(i),str(j),a,'0',a,'1',a,'1','PHX1',int(inc[k]),'419',str(loc)]
+                cnt = cnt+1
+    df_bulk = pd.DataFrame(data = bulk_e.values())
+    if df_bulk.empty == False:
+        df_bulk.columns = ['ref_no','po','date','time','csv_tm','csv_fl','hj_tm','hj_fl','bul_tm','bul_fl','FC_nm','inc_no','fr_type','gmt']
+        for index,row in df_bulk.iterrows():
+          cur.execute('INSERT INTO sandbox_supply_chain.iso_bulk_email ("reference_number","PO_number","Scheduled_date","Scheduled_time","csv_timestamp","csv_flag","HJ_timestamp","HJ_flag","bulk_mail_timestamp","bulk_mail_flag","FC_nm","Incident_NO","Freight_type","utc_time") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                      row['ref_no'],row['po'],row['date'],row['time'],row['csv_tm'],row['csv_fl'],row['hj_tm'],row['hj_fl'],row['bul_tm'],row['bul_fl'],row['FC_nm'],row['inc_no'],row['fr_type'],row['gmt'])
+          
     logger.info("Completed writing data into sandbox table")
     sum1 = 0
     for i in out_1.keys():

@@ -11,10 +11,8 @@ try:
     import logging.handlers
     import csv
     import pandas as pd
-    #from vertica_python import connect
     import pyodbc
     import datetime as dtm
-    #from io import StringIO as StringIO
     from gurobipy import *
     import time
     import smtplib
@@ -27,20 +25,22 @@ try:
     out_1 = {}
     out_2 = {}
     out_3 = {}
+    out_copy = {}
+    missed_ref =[]
     infeas_shift ={}
     infeasible_day = {}
     infeas_ref = []
+    date_fl = {}
     #a = 1.10
     objec = {}
     M1 = 0
     M2 = 0
     sch_sh_check = {}
     TODAY = dtm.datetime.today()
-    today = dtm.datetime.today().date()
     exp_units = {}
     exp_sku = {}
     slot_count = {}
-    logger = logging.getLogger('PHX_run')
+    logger = logging.getLogger('DFW_run')
     logger.setLevel(logging.DEBUG)
     rh = logging.handlers.RotatingFileHandler('ISO_process.log',maxBytes = 500*1024,backupCount = 1)
     rh.setLevel(logging.DEBUG)
@@ -53,21 +53,37 @@ try:
         logger.handlers.clear()
     logger.addHandler(rh)
     logger.addHandler(ch)
+    today = dtm.datetime.today().date()
+    for i in range(1,108):
+        a = today + dtm.timedelta(days = i-15)
+        if a.weekday() == 4:
+            date_fl[str(a)] = '1'
+        elif a.weekday() in [0,1,2,3]:
+            date_fl[str(a)] = '0'
+        else:
+            pass
+        
     #giving slots 
-    day_slots= ['05:30:00','06:00:00','06:30:00','07:30:00','08:30:00','09:00:00','09:30:00','10:00:00','10:30:00','11:00:00']
-    night_slots=['18:00:00','18:30:00','19:00:00','19:30:00','20:00:00','20:30:00','21:00:00']
+    day_slots={'0': ['05:30:00','06:00:00','06:30:00','07:30:00','08:00:00','08:30:00','09:00:00','09:30:00','10:00:00','11:00:00'],
+               '1':['05:30:00','06:00:00','06:30:00','07:00:00','07:30:00','08:00:00','08:30:00','09:00:00','10:00:00','11:00:00','12:00:00','12:30:00','13:00:00','13:30:00','14:00:00','15:00:00','15:30:00','16:00:00']}
+    night_slots={'0':['16:00:00','16:30:00','17:00:00','17:30:00','19:00:00','19:30:00','20:00:00','20:30:00'],
+                 '1':[]}
     cxn = pyodbc.connect("DSN=BIDB",autocommit = True)
     cur = cxn.cursor()
     logger.info("Vertica is Connected")
     std_no = {
-    ('B000078','07:00:00'):'395',
-    ('B000077','07:00:00'): '396',
-    ('3756','23:00:00'): '473',
-    ('P000356','23:00:00'): '478',
-    ('9212','07:00:00'): '491',
-    ('00000002','23:00:00'): '580',
-    ('00000007','23:00:00'): '717',
-    ('00000004','23:00:00'): '718'
+    ('9011','16:30:00') : '271',
+    ('9000','06:30:00') : '266',
+    ('9000','17:00:00') : '376',
+    ('9282','06:30:00') : '329',
+    ('9282','09:00:00') : '325',
+    ('9283','08:00:00') : '327',
+    ('9283','09:00:00') : '372',
+    ('9285','07:30:00') : '273',
+    ('000000012','09:00:00') : '640',
+    ('00000002','22:45:00') : '369',
+    ('00000004','10:00:00') : '602',
+    ('00000007','21:45:00') : '368'
     }
     #Sch_units, Sch_SKU and Sch_appt at day level
     query = """
@@ -77,7 +93,7 @@ try:
     USING(appointment_id)
     JOIN aad.t_po_detail AS pdp
     ON pdp.po_number = pol.po_number
-    WHERE apl.wh_id = 'PHX1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date
+    WHERE apl.wh_id = 'DFW1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     GROUP BY 1
     ORDER BY 1
     """
@@ -90,7 +106,7 @@ try:
     FROM aad.t_appt_appointment_log AS apl
     JOIN aad.t_appt_appointment_log_po AS pol
     USING(appointment_id)
-    WHERE apl.wh_id = 'PHX1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date
+    WHERE apl.wh_id = 'DFW1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     GROUP BY 1,2
     ORDER BY 1,2
     """
@@ -106,7 +122,7 @@ try:
     USING(appointment_id)
     JOIN aad.t_po_detail AS pdp
     ON pdp.po_number = pol.po_number
-    WHERE apl.wh_id = 'PHX1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date
+    WHERE apl.wh_id = 'DFW1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE > current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     GROUP BY 1,2
     ORDER BY 1,2
     """
@@ -131,7 +147,7 @@ try:
     ROUND(abs(iblm.planned_units_received_nights),0) AS planned_units_received_nights 
     from sandbox_fulfillment.t_labor_model_inbound_forward_looking_capacity_new iblm
     join FC_max_date fmd on iblm.scrape_update_dttm = fmd.max_date and iblm.wh_id = fmd.wh_id and iblm.date::date = fmd.date
-    where iblm.date::date >= current_date AND iblm.wh_id = 'PHX1'
+    where iblm.date::date >= current_date AND iblm.wh_id = 'DFW1'
     order by wh_id, date;
     """
     df = pd.read_sql(query,cxn)
@@ -142,7 +158,7 @@ try:
 #     query = """
 #     SELECT common_date_dttm, forecast_percent
 #     FROM sandbox_supply_chain.daily_inbound_forecast_percent
-#     WHERE common_date_dttm between current_date-7 and current_date+123 AND location = 'PHX1'
+#     WHERE common_date_dttm between current_date-7 and current_date+123 AND location = 'DFW1'
 #     ORDER BY 1
 #     """
 #     #cur.execute(query)
@@ -165,7 +181,7 @@ try:
 # =============================================================================
     logger.info("Forecast data is collected") 
 
-     
+  
     cnt = 1
     for i in range(1,108):
         a = today + dtm.timedelta(days = i-1)
@@ -230,7 +246,7 @@ try:
     ON pol.po_number = pdp.po_number
     JOIN chewybi.products AS p
     ON pdp.item_number = p.product_part_number
-    WHERE apl.wh_id = 'PHX1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date 
+    WHERE apl.wh_id = 'DFW1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     GROUP BY 1
     ORDER BY 1
     """
@@ -256,7 +272,7 @@ try:
     ON pol.po_number = pdp.po_number
     JOIN chewybi.products AS p
     ON pdp.item_number = p.product_part_number
-    WHERE apl.wh_id = 'PHX1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date
+    WHERE apl.wh_id = 'DFW1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     GROUP BY 1,2
     ORDER BY 1,2
     """
@@ -279,7 +295,7 @@ try:
     ON pol.po_number = pdp.po_number
     LEFT JOIN chewybi.products AS p
     ON pdp.item_number = p.product_part_number
-    WHERE apl.wh_id = 'PHX1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date
+    WHERE apl.wh_id = 'DFW1' AND apl.status <> 'Cancelled' AND p.product_merch_classification2 = 'Litter'  AND p.product_vas_profile_description IN ('SHRINKWRAP') AND apl.request_date:: DATE >= current_date and dayofweek(apl.request_date:: DATE) NOT IN (6,7)
     ORDER BY 1,2
     """
     df = pd.read_sql(query,cxn)
@@ -289,43 +305,46 @@ try:
     temp_fl = sch_vas_fl.copy()
     for (i,j) in temp_fl.keys():
         gh = 0
-        for k in sorted(day_slots):
-            if j == k and temp_fl[(i,j)] == '1' and gh != 0 and gh != len(day_slots)-1:
+        for k in sorted(day_slots[date_fl[i]]):
+            if j == k and temp_fl[(i,j)] == '1' and gh != 0 and gh != len(day_slots[date_fl[i]])-1:
                 w = gh-1
-                if w < len(day_slots):
-                    sch_vas_fl[(i,day_slots[w])] = '2'
+                if w < len(day_slots[date_fl[i]]):
+                    sch_vas_fl[(i,day_slots[date_fl[i]][w])] = '2'
                 w = gh+1
-                if w < len(day_slots):
-                    sch_vas_fl[(i,day_slots[w])] = '2'
+                if w < len(day_slots[date_fl[i]]):
+                    sch_vas_fl[(i,day_slots[date_fl[i]][w])] = '2'
             elif j == k and temp_fl[(i,j)] == '1' and gh == 0:
                 w = gh+1
-                sch_vas_fl[(i,day_slots[w])] = '2'
-            elif j == k and temp_fl[(i,j)] == '1' and gh == len(day_slots)-1:
+                sch_vas_fl[(i,day_slots[date_fl[i]][w])] = '2'
+            elif j == k and temp_fl[(i,j)] == '1' and gh == len(day_slots[date_fl[i]])-1:
                 w = gh-1
-                sch_vas_fl[(i,day_slots[w])] = '2'
+                sch_vas_fl[(i,day_slots[date_fl[i]][w])] = '2'
             else:
                 pass
             gh = gh+1
     
     for (i,j) in temp_fl.keys():
         gh = 0
-        for k in sorted(night_slots):
-            if j == k and temp_fl[(i,j)] == '1' and gh != 0 and gh != len(night_slots)-1:
-                w = gh-1
-                if w < len(night_slots):
-                    sch_vas_fl[(i,night_slots[w])] = '2'
-                w = gh+1
-                if w < len(night_slots):
-                    sch_vas_fl[(i,night_slots[w])] = '2'
-            elif j == k and temp_fl[(i,j)] == '1' and gh == 0:
-                w = gh+1
-                sch_vas_fl[(i,night_slots[w])] = '2'
-            elif j == k and temp_fl[(i,j)] == '1' and gh == len(night_slots)-1:
-                w = gh-1
-                sch_vas_fl[(i,night_slots[w])] = '2'
-            else:
-                pass
-            gh = gh+1
+        if date_fl[i] == '0':
+            for k in sorted(night_slots[date_fl[i]]):
+                if j == k and temp_fl[(i,j)] == '1' and gh != 0 and gh != len(night_slots[date_fl[i]])-1:
+                    w = gh-1
+                    if w < len(night_slots[date_fl[i]]):
+                        sch_vas_fl[(i,night_slots[date_fl[i]][w])] = '2'
+                    w = gh+1
+                    if w < len(night_slots[date_fl[i]]):
+                        sch_vas_fl[(i,night_slots[date_fl[i]][w])] = '2'
+                elif j == k and temp_fl[(i,j)] == '1' and gh == 0:
+                    w = gh+1
+                    sch_vas_fl[(i,night_slots[date_fl[i]][w])] = '2'
+                elif j == k and temp_fl[(i,j)] == '1' and gh == len(night_slots[date_fl[i]])-1:
+                    w = gh-1
+                    sch_vas_fl[(i,night_slots[date_fl[i]][w])] = '2'
+                else:
+                    pass
+                gh = gh+1
+        else:
+            pass
     logger.info("VAS data is collected and slots are initialized")        
     #getting input data from carrier portal
     query = """
@@ -333,7 +352,7 @@ try:
                 (
                  SELECT cpl.PO_no AS document_number,MAX(cpl.Ref_no) AS reference_number , MAX(cpl.VRDD:: DATE) AS requested_appt_date , MAX(cpl.Created_dt) AS created_dttm
                 FROM sandbox_supply_chain.carrier_portal_new_test AS cpl
-                WHERE cpl.FC_nm = 'PHX1'  AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND')   
+                WHERE cpl.FC_nm = 'DFW1'  AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'DFW1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND')   
                 AND cpl.Ref_no NOT IN (SELECT Ref_no FROM  sandbox_supply_chain.iso_exception)
                 AND cpl.Ref_no <> '190922-029070'
                 GROUP BY 1
@@ -432,7 +451,7 @@ try:
                 LEFT JOIN vas_parameters AS vp
                 ON vp.Ref_no = d.Ref_no
                 )           
-        SELECT d.Ref_no,d.VRDD1 AS VRDD, 
+          SELECT d.Ref_no,d.VRDD1 AS VRDD, 
                      CASE WHEN p1.obj < -1 AND DAYOFWEEK(d.VRDD1-p1.obj) IN (2,3,4,5,6) AND c.cont_flag IS NULL  THEN CAST(d.VRDD1-p1.obj AS DATE) 
                           WHEN p1.obj < -1 AND DAYOFWEEK(d.VRDD1-p1.obj) = 1 AND c.cont_flag IS NULL  THEN CAST(d.VRDD1-p1.obj + 1 AS DATE) 
                           WHEN p1.obj < -1 AND DAYOFWEEK(d.VRDD1-p1.obj) = 7 AND c.cont_flag IS NULL   THEN CAST(d.VRDD1-p1.obj+2 AS DATE)  ELSE CAST(d.VRDD1 AS DATE) END AS VRDD1, 
@@ -483,17 +502,14 @@ try:
     dt = {}
     for i in dt1.keys():
         cnt = 0 
-        if i not in ['191023-039746']:
-            for j in dt1[i]:
-                if j < date:
-                    pass
+        for j in dt1[i]:
+            if j < date:
+                pass
+            else:
+                if i in dt:
+                    dt[i].append(j)
                 else:
-                    if i in dt:
-                        dt[i].append(j)
-                    else:
-                        dt[i] = [j]
-        else:
-            pass
+                    dt[i] = [j]
             
     #po_number
     query = """
@@ -501,7 +517,7 @@ try:
             FROM sandbox_supply_chain.carrier_portal_new_test AS cpl
             JOIN aad.t_po_detail AS pdp
             ON cpl.PO_no = pdp.po_number
-            WHERE cpl.FC_nm = 'PHX1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND')  
+            WHERE cpl.FC_nm = 'DFW1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'DFW1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND')  
             GROUP BY 1,2
     """
     df = pd.read_sql(query,cxn)
@@ -514,7 +530,7 @@ try:
             FROM sandbox_supply_chain.carrier_portal_new_test AS cpl
             JOIN chewybi.procurement_document_measures AS pdp
             ON cpl.PO_no = pdp.document_number
-            WHERE cpl.FC_nm = 'PHX1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND  cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND') 
+            WHERE cpl.FC_nm = 'DFW1' AND UPPER(cpl.request_type) LIKE 'CREATE%' AND cpl.VRDD:: DATE >= '20190701' AND  cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'DFW1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND') 
             ORDER BY 1,2
     """
     df = pd.read_sql(query,cxn)
@@ -533,7 +549,7 @@ try:
     ON pol.po_number = pdm.document_number
     JOIN chewybi.vendors AS v
     ON pdm.vendor_key = v.vendor_key
-    WHERE apl.wh_id = 'PHX1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE >= '2019-07-01' AND v.vendor_number IN ('P000533','B000050','1760','9295','9302','P000544','P000508','P000486','P000400','7701','P000398','B000064','P000421','P000476','3755','3722','8038','5223')
+    WHERE apl.wh_id = 'DFW1' AND LOWER(apl.status) <> 'cancelled' AND apl.request_date:: DATE >= '2019-07-01' AND v.vendor_number IN ('P000533','B000050','1760','9295','9302','P000544','P000508','P000486','P000400','7701','P000398','B000064','P000421','P000476','3755','3722','8038','5223')
     GROUP BY 1
     ORDER BY 1
     """
@@ -550,7 +566,7 @@ try:
             FROM chewybi.procurement_document_measures AS pdm
             JOIN sandbox_supply_chain.carrier_portal_new_test AS cpl
             ON cpl.PO_no = pdm.document_number
-            WHERE cpl.FC_nm = 'PHX1' AND cpl.Ref_no NOT IN (SELECT Ref_no FROM  sandbox_supply_chain.iso_exception) AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'PHX1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND') 
+            WHERE cpl.FC_nm = 'DFW1' AND cpl.Ref_no NOT IN (SELECT Ref_no FROM  sandbox_supply_chain.iso_exception) AND cpl.Created_dt BETWEEN (SELECT MAX(Created_dt) FROM sandbox_supply_chain.ISO_OUTPUT_NEW WHERE FC_nm = 'DFW1') + INTERVAL '1 SECOND' AND (SELECT current_date - INTERVAL '1 SECOND') 
     )
     SELECT d.Ref_no,apl.appointment_id,apl.request_date:: DATE, request_time:: TIME, d.document_number
     FROM data AS d
@@ -575,7 +591,7 @@ try:
     FROM aad.t_appt_appointment_log AS apl
     LEFT JOIN aad.t_appt_appointment_log AS pol
     USING(appointment_id)
-    WHERE apl.request_date:: DATE BETWEEN current_date+1 AND current_date+60 AND LOWER(apl.status) <> 'cancelled' AND apl.standing_appt_id IS NOT NULL AND apl.vendor IS NOT NULL AND apl.wh_id = 'PHX1' AND pol.po_number IS NULL
+    WHERE apl.request_date:: DATE BETWEEN current_date+1 AND current_date+60 AND LOWER(apl.status) <> 'cancelled' AND apl.standing_appt_id IS NOT NULL AND apl.vendor IS NOT NULL AND apl.wh_id = 'DFW1' AND pol.po_number IS NULL AND dayofweek(apl.request_date) NOT IN (1,7)
     ORDER BY 1,2
     """
     df = pd.read_sql(query,cxn)
@@ -626,11 +642,11 @@ try:
     on ss.wh_id = sh."Location Code" 
     and ss.dow = date_part('dow',sh.appt_date) 
     and ss.standing_appt_id = sh.standing_appt_id
-    where vendor not in ('AVP1','CFC1','DAY1','DFW1','EFC3','MCO1','PHX1','WFC2') and ss.wh_id = 'PHX1'
+    where vendor not in ('AVP1','CFC1','DAY1','DFW1','EFC3','MCO1','PHX1','WFC2') and ss.wh_id = 'DFW1'
     group by 1,2,3,4,5,6
     order by 1,4,2
     )
-    SELECT vendor, CASE WHEN scheduled_time BETWEEN '04:00:00' AND '14:30:00' THEN 1 ELSE 2 END AS shift, ROUND(AVG(scheduled_units_per_day),0) AS Units, ROUND((AVG(scheduled_units_per_day) /AVG(UPT)),0) AS SKU
+    SELECT vendor, CASE WHEN dow <> 5 AND   scheduled_time BETWEEN '04:00:00' AND '15:30:00' THEN 1 WHEN dow = 5 AND scheduled_time BETWEEN '04:00:00' AND '16:00:00' THEN 1 ELSE 2 END AS shift, ROUND(AVG(scheduled_units_per_day),0) AS Units, ROUND((AVG(scheduled_units_per_day) /AVG(UPT)),0) AS SKU
     FROM final
     GROUP BY 1,2
     """
@@ -647,7 +663,7 @@ try:
            USING(appointment_id)
            JOIN aad.t_po_detail AS pdp
            ON pol.po_number = pdp.po_number
-           WHERE apl.status <> 'Cancelled' AND apl.request_date:: DATE BETWEEN current_date AND current_date+60 AND apl.wh_id = 'PHX1'
+           WHERE apl.status <> 'Cancelled' AND apl.request_date:: DATE BETWEEN current_date AND current_date+60 AND apl.wh_id = 'DFW1'
            GROUP BY 1,2,3
            ORDER BY 1,2
            )
@@ -692,13 +708,13 @@ try:
             else:
                 sch_sh[(j,str(k))] = [0,0,0]
     for j in sch_dict.keys():
-        for k in day_slots:
+        for k in day_slots[date_fl[j]]:
             if (j,k) in sch_slot:
                 pass
                 #sch_slot[(j,k)] = 0
             else:
                 sch_slot[(j,k)] = 0
-        for k in night_slots:
+        for k in night_slots[date_fl[j]]:
             if (j,k) in sch_slot:
                 pass
                 #sch_slot[(j,k)] = 0
@@ -721,13 +737,13 @@ try:
                 sch_vas_sh[(j,str(k))] = 0
     
     for j in ref.keys():
-        for k in day_slots:
+        for k in day_slots[date_fl[j]]:
             if (j,k) in sch_vas_fl:
                 pass
                 #sch_vas_fl[(j,k)] = '0'
             else:
                 sch_vas_fl[(j,k)] = '0'
-        for k in night_slots:
+        for k in night_slots[date_fl[j]]:
             if (j,k) in sch_vas_fl:
                 pass
                 #sch_vas_fl[(j,k)] = '0'
@@ -737,14 +753,15 @@ try:
     for j in ref.keys():
         if j in cont_appt:
             pass
-            #cont_appt[j] = 0
         else:
-            cont_appt[j] = 2
+            cont_appt[j] = 4
     for (i,j) in sch_sh.keys():
         if j == '1':
-            slot_count[(i,j)] = len(day_slots)*2 + 4 
+            slot_count[(i,j)] = len(day_slots[date_fl[i]])*2 + 4 
+        elif j == '2' and date_fl[i] == '0':
+            slot_count[(i,j)] = len(night_slots[date_fl[i]])*2 + 4
         else:
-            slot_count[(i,j)] = len(night_slots)*2 + 6
+            slot_count[(i,j)] = 0
     for j in cont_appt.keys():
         if cont_appt[j]  < 0:
             cont_appt[j] = 0
@@ -754,13 +771,58 @@ try:
     for j in cont_appt.keys():
         if cont_appt[j] == 0:
             sch_slot[(j,'05:00:00','c')] = 1
-            sch_slot[(j,'23:00:00','c')] = 1
+            sch_slot[(j,'08:00:00','c')] = 1
+            sch_slot[(j,'15:00:00','c')] = 1
+            sch_slot[(j,'19:00:00','c')] = 1
         elif cont_appt[j] == 1:
             sch_slot[(j,'05:00:00','c')] = 1
-            sch_slot[(j,'23:00:00','c')] = 0
+            sch_slot[(j,'08:00:00','c')] = 1
+            sch_slot[(j,'15:00:00','c')] = 1
+            sch_slot[(j,'19:00:00','c')] = 0
+            if (j,'19:00:00') in sch_slot:
+                sch_slot[(j,'19:00:00')] = sch_slot[(j,'19:00:00')] + 1
+            else:
+                sch_slot[(j,'19:00:00')] = 1
+        elif cont_appt[j] == 2:
+            sch_slot[(j,'05:00:00','c')] = 1
+            sch_slot[(j,'08:00:00','c')] = 0
+            sch_slot[(j,'15:00:00','c')] = 1
+            sch_slot[(j,'19:00:00','c')] = 0
+            if (j,'19:00:00') in sch_slot:
+                sch_slot[(j,'19:00:00')] = sch_slot[(j,'19:00:00')] + 1
+            else:
+                sch_slot[(j,'19:00:00')] = 1
+            if (j,'08:00:00') in sch_slot:
+                sch_slot[(j,'08:00:00')] = sch_slot[(j,'08:00:00')] + 1
+            else:
+                sch_slot[(j,'08:00:00')] = 1
+        elif cont_appt[j] == 3:
+            sch_slot[(j,'05:00:00','c')] = 1
+            sch_slot[(j,'08:00:00','c')] = 0
+            sch_slot[(j,'15:00:00','c')] = 0
+            sch_slot[(j,'19:00:00','c')] = 0
+            if (j,'19:00:00') in sch_slot:
+                sch_slot[(j,'19:00:00')] = sch_slot[(j,'19:00:00')] + 1
+            else:
+                sch_slot[(j,'19:00:00')] = 1
+            if (j,'08:00:00') in sch_slot:
+                sch_slot[(j,'08:00:00')] = sch_slot[(j,'08:00:00')] + 1
+            else:
+                sch_slot[(j,'08:00:00')] = 1
         else:
             sch_slot[(j,'05:00:00','c')] = 0
-            sch_slot[(j,'23:00:00','c')] = 0
+            sch_slot[(j,'08:00:00','c')] = 0
+            sch_slot[(j,'15:00:00','c')] = 0
+            sch_slot[(j,'19:00:00','c')] = 0
+            if (j,'19:00:00') in sch_slot:
+                sch_slot[(j,'19:00:00')] = sch_slot[(j,'19:00:00')] + 1
+            else:
+                sch_slot[(j,'19:00:00')] = 1
+            if (j,'08:00:00') in sch_slot:
+                sch_slot[(j,'08:00:00')] = sch_slot[(j,'08:00:00')] + 1
+            else:
+                sch_slot[(j,'08:00:00')] = 1
+            
     for j in units_sku_obj.keys():
         if j in dt.keys():
             for k in range(1,len(dt[j])+1):
@@ -773,11 +835,11 @@ try:
     for j in sch_dict.keys():
         units[j] = sch_dict[j][0]
         slot[j] = sch_dict[j][2]
-    logger.info("Starting to schedule standing appointments")
+    
     #calculating expected units
     for (i,j,k) in stnd_fl.keys():
         if stnd_fl[(i,j,k)] == '0':
-            if j in day_slots:
+            if j in day_slots[date_fl[i]]:
                 if(k,'1') in v_units:
                     if (i,'1') in exp_units:
                         exp_units[(i,'1')] = exp_units[(i,'1')] + v_units[(k,'1')][0]
@@ -812,7 +874,7 @@ try:
     stnd_ref = []
     stnd_ref2 = []
     stnd_ref3 = []
-    
+    logger.info("Starting to schedule standing appointments")
     for j in dt.keys():
         p = 0
         if vendor[j] in stnd_date.keys():
@@ -823,24 +885,30 @@ try:
                         if (k,l,vendor[j]) in stnd_fl.keys():
                             cnt = cnt+1
                             if stnd_fl[(k,l,vendor[j])] == '0' and p == 0 and slot[k] < (slot_count[(k,'1')] + slot_count[(k,'2')]) and units[k] < 1.05 * (f[k][0]+f[k][1]):
-                                if l in ['07:00:00'] and sch_sh[(k,'1')][2] < slot_count[(k,'1')]: 
+                                if l in ['06:30:00','08:00:00','09:00:00','10:00:00'] and sch_sh[(k,'1')][2] < slot_count[(k,'1')] and date_fl[k] == '0' and (vendor[j],'1') in v_units: 
                                     if (k,l) in out_3:
                                         out_3[(k,l)].append(j)
                                     else:
                                         out_3[(k,l)] = [j]
                                     stnd_fl[(k,l,vendor[j])] = '1'
                                     p = 1
-                                    if (vendor[j],'1') in v_units:
-                                        exp_units[(k,'2')] = exp_units[(k,'2')] - v_units[(vendor[j],'1')][0]
-                                elif l in ['23:00:00'] and sch_sh[(k,'2')][2] < slot_count[(k,'2')]:
+                                    exp_units[(k,'1')] = exp_units[(k,'1')] - v_units[(vendor[j],'1')][0]
+                                elif l in ['16:00:00','16:30:00','17:00:00','21:45:00','22:45:00'] and sch_sh[(k,'2')][2] < slot_count[(k,'2')] and date_fl[k] == '0' and (vendor[j],'2') in v_units:
                                     if (k,l) in out_3:
                                         out_3[(k,l)].append(j)
                                     else:
                                         out_3[(k,l)] = [j]
                                     stnd_fl[(k,l,vendor[j])] = '1'
                                     p = 1
-                                    if (vendor[j],'2') in v_units:
-                                        exp_units[(k,'2')] = exp_units[(k,'2')] - v_units[(vendor[j],'2')][0]
+                                    exp_units[(k,'2')] = exp_units[(k,'2')] - v_units[(vendor[j],'2')][0]
+                                elif l in ['06:30:00','07:30:00','09:00:00','10:00:00','16:30:00','21:45:00','22:45:00'] and sch_sh[(k,'1')][2] < slot_count[(k,'1')] and date_fl[k] == '1' and (vendor[j],'1') in v_units:
+                                    if (k,l) in out_3:
+                                        out_3[(k,l)].append(j)
+                                    else:
+                                        out_3[(k,l)] = [j]
+                                    stnd_fl[(k,l,vendor[j])] = '1'
+                                    p = 1
+                                    exp_units[(k,'1')] = exp_units[(k,'1')] - v_units[(vendor[j],'1')][0]
                                 else:
                                     pass
                                 if p == 1:
@@ -855,7 +923,7 @@ try:
                                         std_ref[k].append(j)
                                     else:
                                         std_ref[k] = [j]
-                                    if l in day_slots:
+                                    if l in day_slots[date_fl[k]]:
                                         if (k,1) in std_sh:
                                             std_sh[(k,1)].append(j)
                                         else:
@@ -869,28 +937,28 @@ try:
                                         if stnd_fl[(k,l,'B000046')] == '1':
                                             sch_vas_fl[(k,l)] = '1'
                                             gh = 0
-                                            for d in sorted(day_slots):
-                                                if d == l and gh != 0 and gh != len(day_slots)-1:
+                                            for d in sorted(day_slots[date_fl[k]]):
+                                                if d == l and gh != 0 and gh != len(day_slots[date_fl[k]])-1:
                                                     w = gh-1
-                                                    if w < len(day_slots):
-                                                        sch_vas_fl[(k,day_slots[w])] = '2'
+                                                    if w < len(day_slots[date_fl[k]]):
+                                                        sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
                                                     w = gh+1
-                                                    if w < len(day_slots):
-                                                        sch_vas_fl[(k,day_slots[w])] = '2'
+                                                    if w < len(day_slots[date_fl[k]]):
+                                                        sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
                                                 gh = gh+1
                                             
                                             gh = 0
-                                            for d in sorted(night_slots):
-                                                if d == l and gh != 0 and gh != len(night_slots)-1:
+                                            for d in sorted(night_slots[date_fl[k]]):
+                                                if d == l and gh != 0 and gh != len(night_slots[date_fl[k]])-1:
                                                     w = gh-1
-                                                    if w < len(night_slots):
-                                                        sch_vas_fl[(k,night_slots[w])] = '2'
+                                                    if w < len(night_slots[date_fl[k]]):
+                                                        sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                                                     w = gh+1
-                                                    if w < len(night_slots):
-                                                        sch_vas_fl[(k,night_slots[w])] = '2'
+                                                    if w < len(night_slots[date_fl[k]]):
+                                                        sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                                                 gh = gh+1 
                             else:
-                                if p == 0 and slot[k] + 1 < (slot_count[(k,'1')] + slot_count[(k,'2')]) - 10 and units[k] + exp_units[(k,'1')] + exp_units[(k,'2')] + units_sku_obj[j][0] < 1.05 * (f[k][0]+f[k][1]) and cnt > len(stnd_time[vendor[j]]):
+                                if p == 0 and slot[k] + 1 < (slot_count[(k,'1')] + slot_count[(k,'2')]) -5 and units[k] + exp_units[(k,'1')] + exp_units[(k,'2')] + units_sku_obj[j][0] < 1.05 * (f[k][0]+f[k][1]) and cnt > len(stnd_time[vendor[j]]):
                                     if k in std_ref:
                                         std_ref[k].append(j)
                                     else:
@@ -910,11 +978,17 @@ try:
             if b[k] == '1':
                 temp_bulk[(i,j)] = '1'
     for i in sch_dict.keys():
-        if (sch_dict[i][0] < 1.05 * (f[i][0]+f[i][1])) and (sch_sh[(i,'1')][2] >= len(day_slots)*2 or sch_sh[(i,'2')][2] >= len(night_slots)*2):
-            slot_count[(i,'1')] = len(day_slots)*3 
-            slot_count[(i,'2')] = len(night_slots)*3 
+        if date_fl[i] == '0':
+            if (sch_dict[i][0] < 1.05 * (f[i][0]+f[i][1])) and (sch_sh[(i,'1')][2] >= len(day_slots[date_fl[i]])*2 or sch_sh[(i,'2')][2] >= len(night_slots[date_fl[i]])*2):
+                slot_count[(i,'1')] = len(day_slots[date_fl[i]])*3 
+                slot_count[(i,'2')] = len(night_slots[date_fl[i]])*3 
+            else:
+                pass
         else:
-            pass
+            if (sch_dict[i][0] < 1.05 * f[i]) and (sch_sh[(i,'1')][2] >= len(day_slots[date_fl[i]])*2):
+                slot_count[(i,'1')] = len(day_slots[date_fl[i]])*3 
+            else:
+                pass
     logger.info("Standing Appointment Scheduled")
     #adding exsisting standing appointment slots
     for (i,j,k) in stnd_fl.keys():
@@ -926,7 +1000,7 @@ try:
                 else:
                     sch_dict[i] = [0,0,0]
                     sch_dict[i][2] = 1
-                if j in day_slots:
+                if j in day_slots[date_fl[i]]:
                     if (i,'1') in sch_sh:
                         sch_sh[(i,'1')][2] = sch_sh[(i,'1')][2] + 1
                     else:
@@ -945,7 +1019,7 @@ try:
                 else:
                     sch_dict[i] = [0,0,0]
                     sch_dict[i][2] = 1
-                if j in day_slots:
+                if j in day_slots[date_fl[i]]:
                     if (i,'1') in sch_sh:
                         sch_sh[(i,'1')][2] = sch_sh[(i,'1')][2] + 1
                     else:
@@ -960,7 +1034,7 @@ try:
     #calculating expected units
     for (i,j,k) in stnd_fl.keys():
         if stnd_fl[(i,j,k)] == '0':
-            if j in day_slots:
+            if j in day_slots[date_fl[i]]:
                 if(k,'1') in v_units:
                     if (i,'1') in exp_units:
                         exp_units[(i,'1')] = exp_units[(i,'1')] + v_units[(k,'1')][0]
@@ -990,44 +1064,44 @@ try:
     bulk_break = {}
     for i in sch_dict.keys():
         gh = 0
-        for j in day_slots:
+        for j in day_slots[date_fl[i]]:
             if (i,j) in temp_bulk.keys():
                 bulk_break[(i,j)] = '1'
-                if temp_bulk[(i,j)] == '1' and gh != 0 and gh != len(day_slots)-1:
+                if temp_bulk[(i,j)] == '1' and gh != 0 and gh != len(day_slots[date_fl[i]])-1:
                     w = gh-1
-                    if w < len(day_slots):
-                        bulk_break[(i,day_slots[w])] = '2'
+                    if w < len(day_slots[date_fl[i]]):
+                        bulk_break[(i,day_slots[date_fl[i]][w])] = '2'
                     w = gh+1
-                    if w < len(day_slots):
-                        bulk_break[(i,day_slots[w])] = '2'
+                    if w < len(day_slots[date_fl[i]]):
+                        bulk_break[(i,day_slots[date_fl[i]][w])] = '2'
                 elif temp_bulk[(i,j)] == '1' and gh == 0:
                     w = gh+1
-                    bulk_break[(i,day_slots[w])] = '2'
-                elif temp_bulk[(i,j)] == '1' and gh == len(day_slots)-1:
+                    bulk_break[(i,day_slots[date_fl[i]][w])] = '2'
+                elif temp_bulk[(i,j)] == '1' and gh == len(day_slots[date_fl[i]])-1:
                     w = gh-1
-                    bulk_break[(i,day_slots[w])] = '2'
+                    bulk_break[(i,day_slots[date_fl[i]][w])] = '2'
                 else:
                     pass
             else:
                 bulk_break[(i,j)] = '0'
             gh = gh+1
         gh = 0
-        for j in night_slots:
+        for j in night_slots[date_fl[i]]:
             if (i,j) in temp_bulk.keys():
                 bulk_break[(i,j)] = '1'
-                if temp_bulk[(i,j)] == '1' and gh != 0 and gh != len(night_slots)-1:
+                if temp_bulk[(i,j)] == '1' and gh != 0 and gh != len(night_slots[date_fl[i]])-1:
                     w = gh-1
-                    if w < len(night_slots):
-                        bulk_break[(i,night_slots[w])] = '2'
+                    if w < len(night_slots[date_fl[i]]):
+                        bulk_break[(i,night_slots[date_fl[i]][w])] = '2'
                     w = gh+1
-                    if w < len(night_slots):
-                        bulk_break[(i,night_slots[w])] = '2'
+                    if w < len(night_slots[date_fl[i]]):
+                        bulk_break[(i,night_slots[date_fl[i]][w])] = '2'
                 elif temp_bulk[(i,j)] == '1' and gh == 0:
                     w = gh+1
-                    bulk_break[(i,night_slots[w])] = '2'
-                elif temp_bulk[(i,j)] == '1' and gh == len(night_slots)-1:
+                    bulk_break[(i,night_slots[date_fl[i]][w])] = '2'
+                elif temp_bulk[(i,j)] == '1' and gh == len(night_slots[date_fl[i]])-1:
                     w = gh-1
-                    bulk_break[(i,night_slots[w])] = '2'
+                    bulk_break[(i,night_slots[date_fl[i]][w])] = '2'
                 else:
                     pass
             else:
@@ -1091,11 +1165,11 @@ try:
             #sku distribution constraint
             sku[j] = m1.addConstr(S,GRB.GREATER_EQUAL,sch_dict[j][1]+quicksum(units_sku_obj[k][1]*x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2), name = 'sku[%s]'%(j))
             #vas constraint
-            vas_cons[j] = m1.addConstr(quicksum(vas_units[k] * x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2),GRB.LESS_EQUAL,8000 - sch_vas[j],name='vas_day[%s]'%(j))
+            vas_cons[j] = m1.addConstr(quicksum(vas_units[k] * x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref),GRB.LESS_EQUAL,8000 - sch_vas[j],name='vas_day[%s]'%(j))
             #day assignment constraint
             day_assign[j] = m1.addConstr(quicksum(x[k,j] for k in ref[j] if k not in infeas_ref and k not in stnd_ref2), GRB.LESS_EQUAL,(slot_count[(j,'1')]+slot_count[(j,'2')])- sch_dict[j][2], name='day_assign[%s]' %(j))
             #container appointment constraints
-            con_appt[j] = m1.addConstr(quicksum(x[k,j] for k in ref[j] if cnt_fl[k]=='3.0' and k not in infeas_ref),GRB.LESS_EQUAL,cont_appt[j],name='con_appt[%s]' %(j))
+            con_appt[j] = m1.addConstr(quicksum(x[k,j] for k in ref[j] if cnt_fl[k]=='3.0' and k not in infeas_ref and date_fl[j] == '0'),GRB.LESS_EQUAL,cont_appt[j],name='con_appt[%s]' %(j))
             m1.update()
         for j in dt.keys():
             if j not in infeas_ref and j not in stnd_ref2:
@@ -1108,10 +1182,9 @@ try:
         #standing_appointment_constraint
         for j in std_ref.keys():
             for k in std_ref[j]:
-                if k not in infeas_ref:
-                    stand_appt[(j,k)] = m1.addConstr(x[k,j],GRB.EQUAL,1,name='stand_appt[%s;%s]'%(j,k))
+                stand_appt[(j,k)] = m1.addConstr(x[k,j],GRB.EQUAL,1,name='stand_appt[%s;%s]'%(j,k))
         m1.Params.timeLimit = 600 #declaring timelimit for running model
-        m1.write('day_model_PHX.lp') #writing the day model
+        m1.write('day_model.lp') #writing the day model
         m1.optimize()#Optimizing the day model
         #printing Solver Part I Solution
         if m1.status == GRB.OPTIMAL or m1.status == GRB.TIME_LIMIT:
@@ -1126,7 +1199,7 @@ try:
             print("The day model became infeasible")
             logging.info("The day model became infeasible")
             m1.computeIIS()#computing infeasibility
-            m1.write('day_model_PHX.ilp')#writing causes of infeasibility
+            m1.write('day_model_DFW.ilp')#writing causes of infeasibility
             m1.write('day_model_failed.lp')
             M1 = M1+1
             if len(infeas_ref) + len(stnd_ref) < len(dt.keys()):
@@ -1141,125 +1214,132 @@ try:
     if m1.status == GRB.OPTIMAL or m1.status == GRB.TIME_LIMIT:        
         for j in infeas_ref:
             for k in ref_num[j]:
-                infeasible_day[(j,k)] = [str(TODAY),'PHX1','None',str(j),str(k),dt[j][0],cr_dt[j],'NOT_OPTIMAL']
+                infeasible_day[(j,k)] = [str(TODAY),'DFW1','None',str(j),str(k),dt[j][0],cr_dt[j],'NOT_OPTIMAL']
     else:
         for j in dt.keys():
             for k in ref_num[j]:
-                infeasible_day[(j,k)] = [str(TODAY),'PHX1','None',str(j),str(k),dt[j][0],cr_dt[j],'NOT_OPTIMAL']
+                infeasible_day[(j,k)] = [str(TODAY),'DFW1','None',str(j),str(k),dt[j][0],cr_dt[j],'NOT_OPTIMAL']
     df_day = pd.DataFrame(data = infeasible_day.values())
     logger.info("Solved LP Model at Day level")
     #Solver Part II
     #Initializing Shift Model
     logger.info("Building LP Model at Shift level")
     for j in out_1.keys():
-        m2 = Model()
-        #variable declaration and objective function declaration
-        y = {}
-        for k in out_1[j]:
-            y[j,k,1] = m2.addVar(lb=0,ub=1,vtype=GRB.BINARY, name= 'y[%s;%s;%d]'%(j,k,1))
-            y[j,k,2] = m2.addVar(lb=0,ub=1,vtype=GRB.BINARY,name='y[%s;%s;%d]'%(j,k,2))
-        m2.update()
-        #declaring model Sense
-        US = m2.addVar(lb=0,ub=GRB.INFINITY,vtype=GRB.CONTINUOUS,name ='US')
-        SS = m2.addVar(lb=0,ub=GRB.INFINITY,vtype=GRB.CONTINUOUS,name ='SS')
-        m2.setObjectiveN(US,index=0,priority=1,name='unit_dist')
-        m2.setObjectiveN(SS,index=1,priority=1,name='UPT')
-        m2.modelSense = GRB.MINIMIZE
-        #adding constraint
-        shift_limit = {}
-        shift_dist = {}
-        shift_assign = {}
-        shift_stand = {}
-        unit_shift = {}
-        sku_shift = {}
-        day1 = {}
-        night1 = {}
-        day2 = {} 
-        night2 ={}
-        vas_shift_cons = {}
-        vas_shift_appt = {}
-        #day_shift Slot limitation
-        shift_limit[j,1] = m2.addConstr(quicksum(y[j,k,1] for k in out_1[j]),GRB.LESS_EQUAL,slot_count[(j,'1')]-sch_sh[(j,'1')][2],name='shift_limit[%s;%d]'%(j,1))
-        #night shift limitation
-        shift_limit[j,2] = m2.addConstr(quicksum(y[j,k,2] for k in out_1[j]), GRB.LESS_EQUAL,slot_count[(j,'2')]-sch_sh[(j,'2')][2],name='shift_limit[%s;%d]'%(j,2))
-         #vas limitation day shift
-        if sch_vas_sh[j,'1'] <= 4000:
-            vas_shift_cons[j,1] = m2.addConstr(quicksum(vas_units[k] * y[j,k,1] for k in out_1[j] if k not in stnd_ref),GRB.LESS_EQUAL,4000-sch_vas_sh[j,'1'],name= 'vas_shift_cons[%s;%d]' %(j,1))
-        #vas limitation night shift
-        if sch_vas_sh[j,'2'] <= 4000:
-            vas_shift_cons[j,2] = m2.addConstr(quicksum(vas_units[k] * y[j,k,2] for k in out_1[j] if k not in stnd_ref),GRB.LESS_EQUAL,4000-sch_vas_sh[j,'2'],name= 'vas_shift_cons[%s;%d]' %(j,2))
-        #data structures for model
-        day1[(j,1)] = quicksum(units_sku_obj[k][0] * y[j,k,1] for k in out_1[j])
-        night1[(j,1)] = quicksum(units_sku_obj[k][0] * y[j,k,2] for k in out_1[j])
-        day2[(j,2)] = quicksum(units_sku_obj[k][1] * y[j,k,1] for k in out_1[j])
-        night2[(j,2)] = quicksum(units_sku_obj[k][1] * y[j,k,2] for k in out_1[j])
-                    
-        m2.update()
-        #slot assignment constraint 
-        for k in out_1[j]:
-            shift_assign[j,k] = m2.addConstr(quicksum(y[j,k,l] for l in range(1,3)),GRB.EQUAL,1,name='shift_assign[%s;%s]'%(j,k))
-        m2.update()
-        for k in out_1[j]:
-            if vas_flag[k] == '1' and k not in std_ref:
-                vas_shift_appt[j,k]= m2.addConstr(quicksum(y[j,k,l] for l in range(1,3) if (j,str(l)) not in vas_dt),GRB.EQUAL,1)
-        #Shift Standing appointments
-        for (k,l) in std_sh.keys():
-            if k == j:
-                for m in std_sh[(k,l)]:
-                    shift_stand[(k,l)] = m2.addConstr(y[k,m,l],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(k,m))
-                    
+        if date_fl[j] == '0':
+            m2 = Model()
+            #variable declaration and objective function declaration
+            y = {}
+            for k in out_1[j]:
+                y[j,k,1] = m2.addVar(lb=0,ub=1,vtype=GRB.BINARY, name= 'y[%s;%s;%d]'%(j,k,1))
+                y[j,k,2] = m2.addVar(lb=0,ub=1,vtype=GRB.BINARY,name='y[%s;%s;%d]'%(j,k,2))
+            m2.update()
+            #declaring model Sense
+            US = m2.addVar(lb=0,ub=GRB.INFINITY,vtype=GRB.CONTINUOUS,name ='US')
+            SS = m2.addVar(lb=0,ub=GRB.INFINITY,vtype=GRB.CONTINUOUS,name ='SS')
+            m2.setObjectiveN(US,index=0,priority=1,name='unit_dist')
+            m2.setObjectiveN(SS,index=1,priority=1,name='UPT')
+            m2.modelSense = GRB.MINIMIZE
+            #adding constraint
+            shift_limit = {}
+            shift_dist = {}
+            shift_assign = {}
+            shift_stand = {}
+            unit_shift = {}
+            sku_shift = {}
+            day1 = {}
+            night1 = {}
+            day2 = {} 
+            night2 ={}
+            vas_shift_cons = {}
+            vas_shift_appt = {}
+            #day_shift Slot limitation
+            shift_limit[j,1] = m2.addConstr(quicksum(y[j,k,1] for k in out_1[j]),GRB.LESS_EQUAL,slot_count[(j,'1')]-sch_sh[(j,'1')][2],name='shift_limit[%s;%d]'%(j,1))
+            #night shift limitation
+            shift_limit[j,2] = m2.addConstr(quicksum(y[j,k,2] for k in out_1[j]), GRB.LESS_EQUAL,slot_count[(j,'2')]-sch_sh[(j,'2')][2],name='shift_limit[%s;%d]'%(j,2))
+             #vas limitation day shift
+            if sch_vas_sh[j,'1'] <= 4000:
+                vas_shift_cons[j,1] = m2.addConstr(quicksum(vas_units[k] * y[j,k,1] for k in out_1[j] if k not in stnd_ref),GRB.LESS_EQUAL,4000-sch_vas_sh[j,'1'],name= 'vas_shift_cons[%s;%d]' %(j,1))
+            #vas limitation night shift
+            if sch_vas_sh[j,'2'] <= 4000:
+                vas_shift_cons[j,2] = m2.addConstr(quicksum(vas_units[k] * y[j,k,2] for k in out_1[j] if k not in stnd_ref),GRB.LESS_EQUAL,4000-sch_vas_sh[j,'2'],name= 'vas_shift_cons[%s;%d]' %(j,2))
+            #data structures for model
+            day1[(j,1)] = quicksum(units_sku_obj[k][0] * y[j,k,1] for k in out_1[j])
+            night1[(j,1)] = quicksum(units_sku_obj[k][0] * y[j,k,2] for k in out_1[j])
+            day2[(j,2)] = quicksum(units_sku_obj[k][1] * y[j,k,1] for k in out_1[j])
+            night2[(j,2)] = quicksum(units_sku_obj[k][1] * y[j,k,2] for k in out_1[j])
                         
-                    
-        #container Standing appointments
-        pw=0
-        for k in out_1[j]:
-            if cnt_fl[k]== '3.0':
-                if pw == 0 and cont_appt[j] == 0:
-                    shift_stand[j,k] = m2.addConstr(y[j,k,1],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(j,k))
-                    pw = pw+1
-                else:
-                    shift_stand[j,k] = m2.addConstr(y[j,k,2],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(j,k))
-        
-        #day shift unit limitation
-        unit_shift[j,1]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][0]-sch_sh[(j,'1')][0]-day1[(j,1)]-exp_units[(j,'1')],name='unit_shift[%s;%d]'%(j,1))
-        unit_shift[j,3]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'1')][0]+day1[(j,1)]+exp_units[(j,'1')]-f[j][0],name='unit_shift[%s;%d]'%(j,3))
-        #night shift unit limitation
-        unit_shift[j,2]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][1]-sch_sh[(j,'2')][0]-night1[(j,1)]-exp_units[(j,'2')],name='unit_shift[%s;%d]'%(j,2))
-        unit_shift[j,4]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'2')][0]+night1[(j,1)]+exp_units[(j,'2')]-f[j][1],name='unit_shift[%s;%d]'%(j,4))
-        #day shift SKU limitation
-        sku_shift[j,1]= m2.addConstr(SS,GRB.GREATER_EQUAL,sch_sh[(j,'1')][1]+day2[(j,2)],name='sku_shift[%s;%d]'%(j,1))
-        #night shift SKU limitation
-        sku_shift[j,2]= m2.addConstr(SS,GRB.GREATER_EQUAL,sch_sh[(j,'2')][1]+night2[(j,2)],name='sku_shift[%s;%d]'%(j,2))
-        m2.update
-        m2.Params.timeLimit = 600 #declaring timelimit for running model
-        m2.write('shift_model.lp')#writing shift model
-        m2.optimize()#Optimizing shift model
-        #Printing Solver Part II solutions
-        if m2.status == GRB.OPTIMAL or m2.status == GRB.TIME_LIMIT:
-            for j,k,l in y.keys():
-                if y[j,k,l].x > 0:
-                    if (j,l) in out_2:
-                        out_2[(j,l)].append(k)
+            m2.update()
+            #slot assignment constraint 
+            for k in out_1[j]:
+                shift_assign[j,k] = m2.addConstr(quicksum(y[j,k,l] for l in range(1,3)),GRB.EQUAL,1,name='shift_assign[%s;%s]'%(j,k))
+            m2.update()
+            for k in out_1[j]:
+                if vas_flag[k] == '1' and k not in std_ref:
+                    vas_shift_appt[j,k]= m2.addConstr(quicksum(y[j,k,l] for l in range(1,3) if (j,str(l)) not in vas_dt),GRB.EQUAL,1)
+            #Shift Standing appointments
+            for (k,l) in std_sh.keys():
+                if k == j:
+                    for m in std_sh[(k,l)]:
+                        shift_stand[(k,l)] = m2.addConstr(y[k,m,l],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(k,m))
+                        
+                            
+                        
+            #container Standing appointments
+            pw=0
+            for k in out_1[j]:
+                if cnt_fl[k]== '3.0':
+                    if pw == 0 and cont_appt[j] == 0:
+                        shift_stand[j,k] = m2.addConstr(y[j,k,1],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(j,k))
+                        pw = pw+1
                     else:
-                        out_2[(j,l)] = [k]
-                    
+                        shift_stand[j,k] = m2.addConstr(y[j,k,2],GRB.EQUAL,1,name = 'shift_stand[%s;%s]'%(j,k))
+            
+            #day shift unit limitation
+            unit_shift[j,1]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][0]-sch_sh[(j,'1')][0]-day1[(j,1)]-exp_units[(j,'1')],name='unit_shift[%s;%d]'%(j,1))
+            unit_shift[j,3]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'1')][0]+day1[(j,1)]+exp_units[(j,'1')]-f[j][0],name='unit_shift[%s;%d]'%(j,3))
+            #night shift unit limitation
+            unit_shift[j,2]= m2.addConstr(US,GRB.GREATER_EQUAL,f[j][1]-sch_sh[(j,'2')][0]-night1[(j,1)]-exp_units[(j,'2')],name='unit_shift[%s;%d]'%(j,2))
+            unit_shift[j,4]= m2.addConstr(US,GRB.GREATER_EQUAL,sch_sh[(j,'2')][0]+night1[(j,1)]+exp_units[(j,'2')]-f[j][1],name='unit_shift[%s;%d]'%(j,4))
+            #day shift SKU limitation
+            sku_shift[j,1]= m2.addConstr(SS,GRB.GREATER_EQUAL,sch_sh[(j,'1')][1]+day2[(j,2)],name='sku_shift[%s;%d]'%(j,1))
+            #night shift SKU limitation
+            sku_shift[j,2]= m2.addConstr(SS,GRB.GREATER_EQUAL,sch_sh[(j,'2')][1]+night2[(j,2)],name='sku_shift[%s;%d]'%(j,2))
+            m2.update
+            m2.Params.timeLimit = 600 #declaring timelimit for running model
+            m2.write('shift_model.lp')#writing shift model
+            m2.optimize()#Optimizing shift model
+            #Printing Solver Part II solutions
+            if m2.status == GRB.OPTIMAL or m2.status == GRB.TIME_LIMIT:
+                for j,k,l in y.keys():
+                    if y[j,k,l].x > 0:
+                        if (j,l) in out_2:
+                            out_2[(j,l)].append(k)
+                        else:
+                            out_2[(j,l)] = [k]
+                        
+            else:
+                print("The shift model became infeasible")
+                logging.info("The shift model became infeasible")
+                m2.computeIIS()#computing infeasibility
+                m2.write('shift_model_DFW.ilp')#writing causes of infeasibility
+                m2.write('shift_model_failed.lp')
+                m2.write('day_model_failed.lp')
+                M2 = M2 +1 
+                std = out_1[j]
+                for k in std:
+                    for l in ref_num[k]:
+                        infeas_shift[(k,l)] = [str(TODAY),'DFW1','None',str(k),str(l),dt[k][0],cr_dt[k],'NOT_OPTIMAL']
         else:
-            print("The shift model became infeasible")
-            logging.info("The shift model became infeasible")
-            m2.computeIIS()#computing infeasibility
-            m2.write('shift_model_PHX.ilp')#writing causes of infeasibility
-            m2.write('shift_model_failed.lp')
-            m2.write('day_model_failed.lp')
-            M2 = M2 +1 
-            std = out_1[j]
-            for k in std:
-                for l in ref_num[k]:
-                    infeas_shift[(k,l)] = [str(TODAY),'PHX1','None',str(k),str(l),dt[k][0],cr_dt[k],'NOT_OPTIMAL']
+            for k in out_1[j]:
+                if (j,1) in out_2:
+                    out_2[(j,1)].append(k)
+                else:
+                    out_2[(j,1)] = [k]
     df_sh = pd.DataFrame(data = infeas_shift.values())
     logger.info("Solved LP Model at Shift level")
     #scheduling time slots
     #standing_appointment_slots
-        
+    out_copy = out_2.copy()    
     st_slot = []
     
         #container_appointment_slots
@@ -1286,24 +1366,48 @@ try:
                                 sch_slot[(k,'05:00:00','c')] = sch_slot[(k,'05:00:00','c')] + 1
                                 bulk_break[(k,'05:00:00')] = '1'
                                 bulk_break[(k,'05:30:00')] = '2'
-                    elif sch_slot[(k,'23:00:00','c')] < 1:
+                    elif sch_slot[(k,'15:00:00','c')] < 1:
                         if p == 0:
-                            if (k,'23:00:00') in out_3:
-                                out_3[(k,'23:00:00')].append(a)
+                            if (k,'15:00:00') in out_3:
+                                out_3[(k,'15:00:00')].append(a)
                                 p = 1
-                                sch_slot[(k,'23:00:00','c')] = sch_slot[(k,'23:00:00','c')] + 1
-                                bulk_break[(k,'23:00:00')] = '1'
+                                sch_slot[(k,'15:00:00','c')] = sch_slot[(k,'15:00:00','c')] + 1
+                                bulk_break[(k,'15:00:00')] = '1'
                             else:
-                                out_3[k,'23:00:00'] = [a]
+                                out_3[k,'15:00:00'] = [a]
                                 p = 1
-                                sch_slot[(k,'23:00:00','c')] = sch_slot[(k,'23:00:00','c')] + 1
-                                bulk_break[(k,'23:00:00')] = '1'
+                                sch_slot[(k,'15:00:00','c')] = sch_slot[(k,'15:00:00','c')] + 1
+                                bulk_break[(k,'15:00:00')] = '1'
+                    elif sch_slot[(k,'08:00:00','c')] < 1:
+                        if p == 0:
+                            if (k,'08:00:00') in out_3:
+                                out_3[(k,'08:00:00')].append(a)
+                                p = 1
+                                sch_slot[(k,'08:00:00','c')] = sch_slot[(k,'08:00:00','c')] + 1
+                                bulk_break[(k,'08:00:00')] = '1'
+                            else:
+                                out_3[k,'08:00:00'] = [a]
+                                p = 1
+                                sch_slot[(k,'08:00:00','c')] = sch_slot[(k,'08:00:00','c')] + 1
+                                bulk_break[(k,'08:00:00')] = '1'
+                    elif sch_slot[(k,'19:00:00','c')] < 1:
+                        if p == 0:
+                            if (k,'19:00:00') in out_3:
+                                out_3[(k,'19:00:00')].append(a)
+                                p = 1
+                                sch_slot[(k,'19:00:00','c')] = sch_slot[(k,'19:00:00','c')] + 1
+                                bulk_break[(k,'19:00:00')] = '1'
+                            else:
+                                out_3[k,'19:00:00'] = [a]
+                                p = 1
+                                sch_slot[(k,'19:00:00','c')] = sch_slot[(k,'19:00:00','c')] + 1
+                                bulk_break[(k,'19:00:00')] = '1'
                     else:
                         pass
                 
                 elif vas_flag[a] == '1':
                     if j == 1:
-                        for d in sorted(day_slots):
+                        for d in sorted(day_slots[date_fl[k]]):
                             if p == 0 and sch_vas_fl[(k,d)] == '0' and sch_slot[(k,d)] < 2 :
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1313,7 +1417,7 @@ try:
                                 sch_vas_fl[(k,d)] = '1'
                             else:
                                 pass
-                        for d in sorted(day_slots):
+                        for d in sorted(day_slots[date_fl[k]]):
                             if p == 0 and sch_vas_fl[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1323,7 +1427,7 @@ try:
                                 sch_vas_fl[(k,d)] = '1'
                             else:
                                 pass
-                        for d in sorted(day_slots):
+                        for d in sorted(day_slots[date_fl[k]]):
                             if p == 0 and sch_slot[(k,d)] <= 2 and sch_vas_fl[(k,d)] == '0':
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1334,7 +1438,7 @@ try:
                             else: 
                                 pass
                     else:
-                        for d in sorted(night_slots):
+                        for d in sorted(night_slots[date_fl[k]]):
                             if p == 0 and sch_vas_fl[(k,d)] == '0' and sch_slot[(k,d)] < 2:
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1344,7 +1448,7 @@ try:
                                 sch_vas_fl[(k,d)] = '1'
                             else:
                                 pass
-                        for d in sorted(night_slots):
+                        for d in sorted(night_slots[date_fl[k]]):
                             if p == 0 and sch_vas_fl[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1354,7 +1458,7 @@ try:
                                 sch_vas_fl[(k,d)] = '1'
                             else:
                                 pass
-                        for d in sorted(night_slots):
+                        for d in sorted(night_slots[date_fl[k]]):
                             if p == 0 and sch_slot[(k,d)] <= 3 and sch_vas_fl[(k,d)] == '0':
                                 if (k,d) in out_3:
                                     out_3[(k,d)].append(a)
@@ -1367,44 +1471,44 @@ try:
                                 
                     if p == 1:
                        gh = 0
-                       for d in sorted(day_slots):
-                           if sch_vas_fl[(k,d)] == '1' and gh != 0 and gh != len(day_slots)-1:
+                       for d in sorted(day_slots[date_fl[k]]):
+                           if sch_vas_fl[(k,d)] == '1' and gh != 0 and gh != len(day_slots[date_fl[k]])-1:
                                w = gh-1
-                               if w < len(day_slots):
-                                   sch_vas_fl[(k,day_slots[w])] = '2'
+                               if w < len(day_slots[date_fl[k]]):
+                                   sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
                                w = gh+1
-                               if w < len(day_slots):
-                                   sch_vas_fl[(k,day_slots[w])] = '2'
+                               if w < len(day_slots[date_fl[k]]):
+                                   sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
                            elif sch_vas_fl[(k,d)] == '1' and gh == 0:
                                w = gh+1
-                               sch_vas_fl[(k,day_slots[w])] = '2'
-                           elif j == k and sch_vas_fl[(k,d)] == '1' and gh == len(day_slots)-1:
+                               sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
+                           elif j == k and sch_vas_fl[(k,d)] == '1' and gh == len(day_slots[date_fl[k]])-1:
                                w = gh-1
-                               sch_vas_fl[(k,day_slots[w])] = '2'
+                               sch_vas_fl[(k,day_slots[date_fl[k]][w])] = '2'
                            else:
                                pass
                            gh = gh+1
                        gh = 0
-                       for d in sorted(night_slots):
-                           if sch_vas_fl[(k,d)] == '1' and gh != 0 and gh != len(night_slots)-1:
+                       for d in sorted(night_slots[date_fl[k]]):
+                           if sch_vas_fl[(k,d)] == '1' and gh != 0 and gh != len(night_slots[date_fl[k]])-1:
                                w = gh-1
-                               if w < len(night_slots):
-                                   sch_vas_fl[(k,night_slots[w])] = '2'
+                               if w < len(night_slots[date_fl[k]]):
+                                   sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                                w = gh+1
-                               if w < len(night_slots):
-                                   sch_vas_fl[(k,night_slots[w])] = '2'
+                               if w < len(night_slots[date_fl[k]]):
+                                   sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                            elif sch_vas_fl[(k,d)] == '1' and gh == 0:
                                w = gh+1
-                               sch_vas_fl[(k,night_slots[w])] = '2'
+                               sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                            elif sch_vas_fl[(k,d)] == '1' and gh == len(night_slots)-1:
                                w = gh-1
-                               sch_vas_fl[(k,night_slots[w])] = '2'
+                               sch_vas_fl[(k,night_slots[date_fl[k]][w])] = '2'
                            else:
                                pass
                            gh = gh+1
                     elif b[a] == '1':
                         if j == 1:
-                            for d in sorted(day_slots):
+                            for d in sorted(day_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] < 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1414,7 +1518,7 @@ try:
                                     bulk_break[(k,d)] = '1'
                                 else:
                                     pass
-                            for d in sorted(day_slots):
+                            for d in sorted(day_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1424,7 +1528,7 @@ try:
                                     bulk_break[(k,d)] = '1'
                                 else:
                                     pass
-                            for d in sorted(day_slots):
+                            for d in sorted(day_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1435,7 +1539,7 @@ try:
                                 else: 
                                     pass
                         else:
-                            for d in sorted(night_slots):
+                            for d in sorted(night_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] < 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1445,7 +1549,7 @@ try:
                                     bulk_break[(k,d)] = '1'
                                 else:
                                     pass
-                            for d in sorted(night_slots):
+                            for d in sorted(night_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1455,7 +1559,7 @@ try:
                                     bulk_break[(k,d)] = '1'
                                 else:
                                     pass
-                            for d in sorted(night_slots):
+                            for d in sorted(night_slots[date_fl[k]]):
                                 if p == 0 and bulk_break[(k,d)] == '0' and sch_slot[(k,d)] <= 2:
                                     if (k,d) in out_3:
                                         out_3[(k,d)].append(a)
@@ -1468,28 +1572,28 @@ try:
                                     
                         if p == 1:
                            gh = 0
-                           for d in sorted(day_slots):
-                               if bulk_break[(k,d)] == '1' and gh != 0 and gh != len(day_slots)-1:
+                           for d in sorted(day_slots[date_fl[k]]):
+                               if bulk_break[(k,d)] == '1' and gh != 0 and gh != len(day_slots[date_fl[k]])-1:
                                    w = gh-1
-                                   if w < len(day_slots):
-                                       bulk_break[(k,day_slots[w])] = '2'
+                                   if w < len(day_slots[date_fl[k]]):
+                                       bulk_break[(k,day_slots[date_fl[k]][w])] = '2'
                                    w = gh+1
                                    if w < len(day_slots):
-                                       bulk_break[(k,day_slots[w])] = '2'
+                                       bulk_break[(k,day_slots[date_fl[k]][w])] = '2'
                                gh = gh+1
                            gh = 0
-                           for d in sorted(night_slots):
-                               if bulk_break[(k,d)] == '1' and gh != 0 and gh != len(night_slots)-1:
+                           for d in sorted(night_slots[date_fl[k]]):
+                               if bulk_break[(k,d)] == '1' and gh != 0 and gh != len(night_slots[date_fl[k]])-1:
                                    w = gh-1
-                                   if w < len(night_slots):
-                                       bulk_break[(k,night_slots[w])] = '2'
+                                   if w < len(night_slots[date_fl[k]]):
+                                       bulk_break[(k,night_slots[date_fl[k]][w])] = '2'
                                    w = gh+1
                                    if w < len(night_slots):
-                                       bulk_break[(k,night_slots[w])] = '2'
+                                       bulk_break[(k,night_slots[date_fl[k]][w])] = '2'
                                gh = gh+1
                 else: #other appointments
                     if j == 1:
-                        for l in sorted(day_slots):
+                        for l in sorted(day_slots[date_fl[k]]):
                             if l not in st_slot:
                                 if sch_slot[(k,l)] < 1:
                                     if p == 0:
@@ -1503,7 +1607,7 @@ try:
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                                 
                         if p == 0:
-                            for l in sorted(day_slots):
+                            for l in sorted(day_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] < 2:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1515,7 +1619,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1 
                         if p == 0:
-                            for l in sorted(day_slots):
+                            for l in sorted(day_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] < 3:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1527,7 +1631,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                         if p == 0:
-                            for l in sorted(day_slots):
+                            for l in sorted(day_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] <= 3:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1539,7 +1643,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                     else:
-                        for l in sorted(night_slots):
+                        for l in sorted(night_slots[date_fl[k]]):
                             if l not in st_slot:
                                 if sch_slot[(k,l)] < 1:
                                     if p == 0:
@@ -1552,7 +1656,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                         if p == 0:
-                            for l in sorted(night_slots):
+                            for l in sorted(night_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] < 2:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1564,7 +1668,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                         if p == 0:
-                            for l in sorted(night_slots):
+                            for l in sorted(night_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] < 3:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1576,7 +1680,7 @@ try:
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
                         if p == 0:
-                            for l in sorted(night_slots):
+                            for l in sorted(night_slots[date_fl[k]]):
                                 if sch_slot[(k,l)] <= 3:
                                     if p == 0:
                                         if (k,l) in out_3:
@@ -1587,6 +1691,8 @@ try:
                                             out_3[(k,l)] = [a]
                                             p = 1
                                             sch_slot[(k,l)] = sch_slot[(k,l)] + 1
+                if p == 0:
+                    missed_ref.append(a)
     logger.info("Completed Scheduling time slots")     
     print(M1)
     logger.info("No.of times day model failed: "+ str(M1))
@@ -1594,7 +1700,7 @@ try:
     logger.info("No.of times shift model failed: "+ str(M2))
     data = {}
     #Printing Schedule with units
-    out_file = open('SCHEDULE_PHX_UNITS.csv','w')
+    out_file = open('SCHEDULE_DFW_UNITS.csv','w')
     out_file.write('Id'+','+'Scheduled_date'+','+'shift'+','+'units'+','+'sku'+','+'VRDD-ORDD'+','+'VRDD'+','+'UPT_type')
     out_file.write('\n')
     M3 = 0
@@ -1606,27 +1712,26 @@ try:
     a = str(dtm.datetime.today())
     logger.info("Writing Output to a CSV file")    
     #Printing the output schedule                   
-    out_file = open('SCHEDULE_PHX_'+str(date)+'_.csv','w')
-    #out_file = open('SCHEDULE_PHX.csv','w')
+    out_file = open('SCHEDULE_DFW_'+str(date)+'_.csv','w')
     out_file.write('Reference_number'+','+'PO_number'+','+'Scheduled_date'+','+'Scheduled_time'+','+'units'+','+'sku'+','+'hj_rank'+','+'vendor'+','+'carrier'+','+'delete'+','+'ORDD'+','+'VRDD'+','+'vas_units'+','+'VNA'+','+'Reason')
     out_file.write('\n')
-    for i,j in rsch.keys():
-        out_file.write(str(i)+','+str(j)+','+str(rsch[(i,j)][0])+','+str(rsch[(i,j)][1])+','+','+','+','+','+','+'Y')
-        out_file.write('\n')
     for i,j in sorted(out_3.keys()):
         for k in out_3[(i,j)]:
             for l in ref_num[k]:
                 if (vendor[k],j) in std_no:
                     out_file.write(str(k)+','+str(l)+','+str(i)+','+str(j)+','+str(po[(k,l)][0])+','+str(po[(k,l)][1])+','+str(hj_rank[k])+','+str(v_name[k])+','+str(csr[k])+','+'N'+','+str(ordd[l])+','+str(vrdd[k])+','+str(vas_units[k])+','+'419'+','+str(std_no[(vendor[k],j)]))
                     out_file.write('\n')
-                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1','Daily']
+                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'DFW1','Daily']
                 else:
                     out_file.write(str(k)+','+str(l)+','+str(i)+','+str(j)+','+str(po[(k,l)][0])+','+str(po[(k,l)][1])+','+str(hj_rank[k])+','+str(v_name[k])+','+str(csr[k])+','+'N'+','+str(ordd[l])+','+str(vrdd[k])+','+str(vas_units[k]))
                     out_file.write('\n')
-                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'PHX1','Daily']
+                    data[M3,l] = [a,k,l,i,j,po[(k,l)][0],po[(k,l)][1],v_name[k],cr_dt[k],'DFW1','Daily']
             M3 = M3+1
-    out_file.close()
     df_out = pd.DataFrame(data = data.values())
+    for i,j in rsch.keys():
+        out_file.write(str(i)+','+str(j)+','+str(rsch[(i,j)][0])+','+str(rsch[(i,j)][1])+','+','+','+','+','+','+'Y')
+        out_file.write('\n')
+    out_file.close()
     logger.info("CSV file is created")
     logger.info("Writing data into Sandbox table")
     #Writing Exception day model
@@ -1647,7 +1752,6 @@ try:
         for index,row in df_out.iterrows():
             cur.execute('INSERT INTO sandbox_supply_chain.ISO_OUTPUT_NEW ("rundate","Reference_number","PO_number","Sch_date","Sch_time","Units","SKU","vendor","Created_dt","FC_nm","Batch") VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                         (row['rt'],row['ref'],row['po'],row['dt'],row['tm'],row['units'],row['sku'],row['vendor'],row['cr_dt'],row['FC_nm'],row['Batch']))
-    
     bulk_e = {}
     cnt = 0
     for i,j in sorted(out_3.keys()):
@@ -1661,7 +1765,7 @@ try:
         loc = loc.replace(tzinfo = None)
         for k in out_3[(i,j)]:
             for l in ref_num[k]:
-                bulk_e[cnt] = [str(k),str(l),str(i),str(j),a,'0',a,'1',a,'1','PHX1',int(inc[k]),'419',str(loc)]
+                bulk_e[cnt] = [str(k),str(l),str(i),str(j),a,'0',a,'1',a,'1','DFW1',int(inc[k]),'419',str(loc)]
                 cnt = cnt+1
     df_bulk = pd.DataFrame(data = bulk_e.values())
     if df_bulk.empty == False:
@@ -1669,7 +1773,7 @@ try:
         for index,row in df_bulk.iterrows():
           cur.execute('INSERT INTO sandbox_supply_chain.iso_bulk_email ("reference_number","PO_number","Scheduled_date","Scheduled_time","csv_timestamp","csv_flag","HJ_timestamp","HJ_flag","bulk_mail_timestamp","bulk_mail_flag","FC_nm","Incident_NO","Freight_type","utc_time") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                       row['ref_no'],row['po'],row['date'],row['time'],row['csv_tm'],row['csv_fl'],row['hj_tm'],row['hj_fl'],row['bul_tm'],row['bul_fl'],row['FC_nm'],row['inc_no'],row['fr_type'],row['gmt'])
-          
+            
     logger.info("Completed writing data into sandbox table")
     sum1 = 0
     for i in out_1.keys():
@@ -1693,13 +1797,14 @@ try:
     execution = end_time-start_time
     print(execution)
     logger.info("Execution time: "+ str(execution)+" SECONDS")
+ 
     fromaddr = 'scsystems@chewy.com'
     toaddr = 'vmanohar@chewy.com'
     to = ', '.join(toaddr)
     msg = MIMEMultipart()
     msg['From'] = fromaddr
     msg['To'] = toaddr
-    msg['Subject'] = "Algorithm Successfully ran for PHX1" 
+    msg['Subject'] = "Algorithm Successfully ran for DFW1" 
     body = "Hello, \nNo.of times Day Model failed: "+str(M1)+"\nNo.of times Shift model failed: "+str(M2)+"\nNo.of Incidents Requested: "+str(sum1)+"\nNo.of Incidents Scheduled: "+str(sum3)+".\nThanks"
     msg.attach(MIMEText(body, 'plain'))
     server = smtplib.SMTP('smtp.chewymail.com', 25)
@@ -1708,20 +1813,17 @@ try:
     logger.info("Email was sent to the recipients: %s" %(toaddr))
     server.quit()
     print("Email was sent to the recipients: %s" %(toaddr))
-        
-    cur.close()
-    logger.info("Vertica is Disconnected")
     if M1 > 0 or M2 > 0:
         if M1 > 0 and M2==0:
             fromaddr = 'scsystems@chewy.com'
             toaddr = 'vmanohar@chewy.com,igonzalez1@chewy.com,EAlfonso@chewy.com,jxie@chewy.com'
             to = ', '.join(toaddr)
-            file_list = ['day_model_PHX.ilp']
+            file_list = ['day_model_DFW.ilp']
             msg = MIMEMultipart()
             msg['From'] = fromaddr
             msg['To'] = toaddr
-            msg['Subject'] = "LP Model Failed for PHX1 at day level" 
-            body = "Hello, \nModel Failed at day level.\nThanks\nVenkatesh"
+            msg['Subject'] = "LP Model Failed for DFW1 at day level" 
+            body = "Hello, \nModel Failed at day level for"+str(M1)+"times.\nThanks\nVenkatesh"
             msg.attach(MIMEText(body, 'plain'))
             for j in file_list:
                 file_path = j
@@ -1741,15 +1843,15 @@ try:
             fromaddr = 'scsystems@chewy.com'
             toaddr = 'vmanohar@chewy.com,igonzalez1@chewy.com,EAlfonso@chewy.com,jxie@chewy.com'
             to = ', '.join(toaddr)
-            file_list = ['shift_model_PHX.ilp']
+            file_list = ['shift_model_DFW.ilp']
             msg = MIMEMultipart()
             msg['From'] = fromaddr
             msg['To'] = toaddr
-            msg['Subject'] = "LP Model Failed for PHX1 at shift level" 
-            body = "Hello, \nModel Failed at shift level.\nThanks\nVenkatesh"
+            msg['Subject'] = "LP Model Failed for DFW1 at shift level" 
+            body = "Hello, \nModel Failed at shift level"+str(M2)+"times.\nThanks\nVenkatesh"
             msg.attach(MIMEText(body, 'plain'))
             for j in file_list:
-                file_path = j
+                file_path =  j
                 attachment = open(file_path, "rb")
                 part = MIMEBase('application', 'octet-stream')
                 part.set_payload((attachment).read())
@@ -1766,15 +1868,15 @@ try:
             fromaddr = 'scsystems@chewy.com'
             toaddr = 'vmanohar@chewy.com,igonzalez1@chewy.com,EAlfonso@chewy.com,jxie@chewy.com'
             to = ', '.join(toaddr)
-            file_list = ['shift_model_PHX.ilp','day_model_PHX.ilp']
+            file_list = ['shift_model_DFW.ilp','day_model_DFW.ilp']
             msg = MIMEMultipart()
             msg['From'] = fromaddr
             msg['To'] = toaddr
-            msg['Subject'] = "LP Model Failed for PHX1 at day level and  shift level" 
-            body = "Hello, \nModel Failed at day level and shift level.\nThanks\nVenkatesh"
+            msg['Subject'] = "LP Model Failed for DFW1 at day level and  shift level" 
+            body = "Hello, \nModel Failed at day level"+str(M1)+"times and shift level"+str(M2)+"times.\nThanks\nVenkatesh"
             msg.attach(MIMEText(body, 'plain'))
             for j in file_list:
-                file_path =  + j
+                file_path = j
                 attachment = open(file_path, "rb")
                 part = MIMEBase('application', 'octet-stream')
                 part.set_payload((attachment).read())
@@ -1787,8 +1889,8 @@ try:
             logger.info("Email was sent to the recipients: %s" %(toaddr))
             server.quit()
             print("Email was sent to the recipients: %s" %(toaddr))    
-    logger.info("Vertica is Disconnected")
     cxn.close()
+    logger.info("Vertica is Disconnected")
 except Exception as e:
     print("Error Reported")
     logger.error("Error in the code: "+str(e))
@@ -1798,7 +1900,7 @@ except Exception as e:
     msg = MIMEMultipart()
     msg['From'] = fromaddr
     msg['To'] = toaddr
-    msg['Subject'] = "Algorithm did not run for PHX1" 
+    msg['Subject'] = "Algorithm did not run for DFW1" 
     body = "Hello, Algorithm failed for the following reason :"+str(e)+"\nThanks"
     msg.attach(MIMEText(body, 'plain'))
     server = smtplib.SMTP('smtp.chewymail.com', 25)
@@ -1807,6 +1909,6 @@ except Exception as e:
     logger.info("Email was sent to the recipients: %s" %(toaddr))
     server.quit()
     print("Email was sent to the recipients: %s" %(toaddr))
-    cxn.close()
     logger.info("Vertica is Disconnected")
+    cxn.close()
 rh.close()

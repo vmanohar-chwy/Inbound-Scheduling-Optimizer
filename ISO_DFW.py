@@ -70,15 +70,6 @@ try:
                '1':['05:30:00','06:00:00','06:30:00','07:00:00','07:30:00','08:00:00','08:30:00','09:00:00','10:00:00','11:00:00','12:00:00','12:30:00','13:00:00','13:30:00','14:00:00','15:00:00','15:30:00','16:00:00']}
     night_slots={'0':['16:00:00','16:30:00','17:00:00','17:30:00','19:00:00','19:30:00','20:00:00','20:30:00'],
                  '1':[]}
-    #conn_info = {'host' : 'bidb.chewy.local',
-     #'port': 5433,
-     #'user': 'vmanohar',
-     #'password':'Venkat0SU2018',
-     #'database':'bidb'
-    #}
-    #connecting to vertica
-    #connection = connect(**conn_info)
-    #cur = connection.cursor()
     cxn = pyodbc.connect("DSN=BIDB",autocommit = True)
     cur = cxn.cursor()
     logger.info("Vertica is Connected")
